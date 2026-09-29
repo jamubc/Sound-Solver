@@ -5,13 +5,14 @@
 use exhaust_core::fabricate::Package;
 use exhaust_core::layout::Layout;
 use exhaust_core::manifest::Manifest;
-use exhaust_core::measure::OrderTracks;
+use exhaust_core::measure::{HoldComparison, OrderTracks};
 use exhaust_core::metrics::OrderDifference;
 use exhaust_core::project::Project;
 use exhaust_core::render::{RenderInfo, RenderProgress, Scene};
 use exhaust_core::scan::Clearance;
 use exhaust_core::solve::{CycleProgress, PointOutcome, SweepResult};
 use exhaust_core::tune::Tuning;
+use exhaust_core::validation::CaseReport;
 use schemars::{JsonSchema, Schema};
 
 /// The app backend's replies, for generating the frontend's types.
@@ -32,6 +33,8 @@ struct Api {
     scene: Scene,
     render: RenderInfo,
     render_progress: RenderProgress,
+    hold: HoldComparison,
+    verification: Vec<CaseReport>,
 }
 
 fn check(file: &str, schema: Schema) {

@@ -85,6 +85,17 @@ export async function mockBackend(page: Page, project: 'project' | 'project-stub
         return bytes;
       },
       cancel_render: () => null,
+      // Two benchmark cases, sent as they finish.
+      verify: (args) => {
+        const send = callbacks.get((args.onCase as { id: number }).id)!;
+        const reports = [
+          { case: 'sod', subsystem: 'propagation', checks: [{ case: 'Sod shock tube', metric: 'density error', value: 0.004, limit: 0.02, pass: true }], error: null },
+          { case: 'outlet', subsystem: 'radiation', checks: [{ case: 'Levine–Schwinger outlet', metric: '|R| error', value: 0.001, limit: 0.01, pass: true }], error: null },
+        ];
+        reports.forEach((message, index) => send({ index, message }));
+        send({ index: reports.length, end: true });
+        return reports;
+      },
       // A flat underbody 200 mm above the flange, in metres: 4 vertices, 2 triangles.
       scan_mesh: () => {
         const v = [-4, -1, 0.2, 1, -1, 0.2, 1, 1, 0.2, -4, 1, 0.2];

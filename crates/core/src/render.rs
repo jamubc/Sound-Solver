@@ -583,7 +583,7 @@ fn march(
 }
 
 /// ⅓-octave bands 10 Hz – 20 kHz: (centre, lower, upper), Hz.
-fn third_octaves() -> Vec<(f64, f64, f64)> {
+pub fn third_octaves() -> Vec<(f64, f64, f64)> {
     (-20..=13)
         .map(|k| {
             let c = 1000.0 * 10f64.powf(k as f64 / 10.0);

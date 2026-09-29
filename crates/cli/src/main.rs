@@ -171,6 +171,24 @@ enum Command {
         #[arg(long)]
         info: Option<PathBuf>,
     },
+    /// Check a steady hold of one of the project's calibrated recordings against a render of
+    /// the same engine speed where it was made, band by band (JSON).
+    Hold {
+        /// Project file (JSON).
+        project: PathBuf,
+        /// Index into `measurements.recordings`.
+        #[arg(long, default_value_t = 0)]
+        recording: usize,
+        /// Start of the hold, s from the recording's start.
+        #[arg(long)]
+        from: f64,
+        /// End of the hold, s.
+        #[arg(long)]
+        to: f64,
+        /// A recording of the background, same phone at the same gain.
+        #[arg(long)]
+        background: Option<PathBuf>,
+    },
     /// Run the analytic validation suite; exits non-zero if any check fails.
     Validate {
         /// Print the checks as JSON instead of a table.
@@ -482,6 +500,66 @@ fn run(cli: Cli) -> Result<ExitCode, String> {
                     "render": r.info,
                 }),
                 info,
+            )?;
+            Ok(ExitCode::SUCCESS)
+        }
+        Command::Hold {
+            project: path,
+            recording,
+            from,
+            to,
+            background,
+        } => {
+            let project = read_project(&path)?;
+            let spec = project
+                .measurements
+                .recordings
+                .get(recording)
+                .ok_or_else(|| format!("the project has no recording {recording}"))?;
+            let cal = spec
+                .calibration_db
+                .ok_or("calibrate the recording first: the comparison is in dB re 20 µPa")?;
+            let dir = path.parent().unwrap_or(Path::new("."));
+            let read_rec = |file: &Path| -> Result<Recording, String> {
+                let bytes = std::fs::read(file).map_err(|e| format!("{}: {e}", file.display()))?;
+                Recording::parse(&file.to_string_lossy(), &bytes)
+                    .map_err(|e| format!("{}: {e}", file.display()))
+            };
+            let rec = read_rec(&dir.join(&spec.path))?;
+            let log = match &spec.rpm_log {
+                Some(name) => {
+                    let text = std::fs::read_to_string(dir.join(name))
+                        .map_err(|e| format!("{name}: {e}"))?;
+                    Some(RpmLog::parse(&text).map_err(|e| format!("{name}: {e}"))?)
+                }
+                None => None,
+            };
+            let [start, stop, _] = project.operating.sweep_rpm;
+            let window = [from, to];
+            let (rpm, rpm_spread, rpm_estimated) =
+                measure::hold_rpm(&rec, log.as_ref(), spec.log_offset_s, window, [start, stop])
+                    .map_err(|e| e.to_string())?;
+            let scene = measure::hold_scene(rpm, window, spec.position);
+            let r = render(&project, &scene, &mut |_| true).map_err(|e| e.to_string())?;
+            let background = background.as_deref().map(read_rec).transpose()?;
+            let resolved: Vec<bool> = r.info.bands.iter().map(|b| b.resolved).collect();
+            emit(
+                &measure::HoldComparison {
+                    window_s: window,
+                    rpm,
+                    rpm_spread,
+                    rpm_estimated,
+                    bands: measure::compare_hold(
+                        &rec,
+                        cal,
+                        window,
+                        background.as_ref().map(|b| (b, cal)),
+                        &r.channels[0],
+                        r.info.sample_rate,
+                        &resolved,
+                    ),
+                },
+                None,
             )?;
             Ok(ExitCode::SUCCESS)
         }

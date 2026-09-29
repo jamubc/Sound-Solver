@@ -246,6 +246,7 @@ export interface Api {
   clearance: Clearance;
   differences: OrderDifference[];
   fabrication: Package;
+  hold: HoldComparison;
   layout: Layout;
   manifests: Manifest[];
   /**
@@ -267,6 +268,7 @@ export interface Api {
   sweep: SweepResult;
   tracks: OrderTracks;
   tuning: Tuning;
+  verification: CaseReport[];
 }
 /**
  * This interface was referenced by `Api`'s JSON-Schema
@@ -464,6 +466,61 @@ export interface Weld {
    */
   note?: string | null;
   route: string;
+}
+/**
+ * A steady hold of a calibrated recording set against a render of the same engine speed at
+ * the same place, band by band. Recordings validate; nothing here is fed back into an input.
+ *
+ * This interface was referenced by `Api`'s JSON-Schema
+ * via the `definition` "HoldComparison".
+ */
+export interface HoldComparison {
+  bands: BandComparison[];
+  /**
+   * Engine speed over the hold: mean and standard deviation, rpm.
+   */
+  rpm: number;
+  /**
+   * Engine speed estimated from the recording, without a log.
+   */
+  rpm_estimated: boolean;
+  rpm_spread: number;
+  /**
+   * The hold, s from the recording's start.
+   *
+   * @minItems 2
+   * @maxItems 2
+   */
+  window_s: [number, number];
+}
+/**
+ * This interface was referenced by `Api`'s JSON-Schema
+ * via the `definition` "BandComparison".
+ */
+export interface BandComparison {
+  center_hz: number;
+  /**
+   * Predicted less measured, dB.
+   */
+  error_db?: number | null;
+  /**
+   * Measured level, dB re 20 µPa, corrected for the background when one is given; `None`
+   * where the recording cannot give it.
+   */
+  measured_db?: number | null;
+  /**
+   * Why the measured level is missing or corrected.
+   */
+  note?: string | null;
+  predicted_db?: number | null;
+  /**
+   * The render resolves this band.
+   */
+  resolved: boolean;
+  /**
+   * Indicative target, ± dB (shown, not passed or failed): 3 up to 2 kHz, 5 above.
+   */
+  target_db: number;
 }
 /**
  * This interface was referenced by `Api`'s JSON-Schema
@@ -996,6 +1053,34 @@ export interface Tuning {
    */
   rpm: number;
   target_hz: number;
+  value: number;
+}
+/**
+ * A case run on demand: its checks, or why it did not run.
+ *
+ * This interface was referenced by `Api`'s JSON-Schema
+ * via the `definition` "CaseReport".
+ */
+export interface CaseReport {
+  case: string;
+  checks: Check[];
+  error?: string | null;
+  subsystem: string;
+}
+/**
+ * One validated quantity.
+ *
+ * This interface was referenced by `Api`'s JSON-Schema
+ * via the `definition` "Check".
+ */
+export interface Check {
+  case: string;
+  /**
+   * Pass when `value <= limit`.
+   */
+  limit: number;
+  metric: string;
+  pass: boolean;
   value: number;
 }
 /**

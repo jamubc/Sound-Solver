@@ -16,6 +16,9 @@
     "fabrication": {
       "$ref": "#/$defs/Package"
     },
+    "hold": {
+      "$ref": "#/$defs/HoldComparison"
+    },
     "layout": {
       "$ref": "#/$defs/Layout"
     },
@@ -49,6 +52,12 @@
     },
     "tuning": {
       "$ref": "#/$defs/Tuning"
+    },
+    "verification": {
+      "type": "array",
+      "items": {
+        "$ref": "#/$defs/CaseReport"
+      }
     }
   },
   "required": [
@@ -64,7 +73,9 @@
     "differences",
     "scene",
     "render",
-    "render_progress"
+    "render_progress",
+    "hold",
+    "verification"
   ],
   "$defs": {
     "Band": {
@@ -100,6 +111,119 @@
         "upper_hz",
         "resolved",
         "reasons"
+      ]
+    },
+    "BandComparison": {
+      "type": "object",
+      "properties": {
+        "center_hz": {
+          "type": "number",
+          "format": "double"
+        },
+        "error_db": {
+          "description": "Predicted less measured, dB.",
+          "type": [
+            "number",
+            "null"
+          ],
+          "format": "double"
+        },
+        "measured_db": {
+          "description": "Measured level, dB re 20 µPa, corrected for the background when one is given; `None`\nwhere the recording cannot give it.",
+          "type": [
+            "number",
+            "null"
+          ],
+          "format": "double"
+        },
+        "note": {
+          "description": "Why the measured level is missing or corrected.",
+          "type": [
+            "string",
+            "null"
+          ]
+        },
+        "predicted_db": {
+          "type": [
+            "number",
+            "null"
+          ],
+          "format": "double"
+        },
+        "resolved": {
+          "description": "The render resolves this band.",
+          "type": "boolean"
+        },
+        "target_db": {
+          "description": "Indicative target, ± dB (shown, not passed or failed): 3 up to 2 kHz, 5 above.",
+          "type": "number",
+          "format": "double"
+        }
+      },
+      "required": [
+        "center_hz",
+        "target_db",
+        "resolved"
+      ]
+    },
+    "CaseReport": {
+      "description": "A case run on demand: its checks, or why it did not run.",
+      "type": "object",
+      "properties": {
+        "case": {
+          "type": "string"
+        },
+        "checks": {
+          "type": "array",
+          "items": {
+            "$ref": "#/$defs/Check"
+          }
+        },
+        "error": {
+          "type": [
+            "string",
+            "null"
+          ]
+        },
+        "subsystem": {
+          "type": "string"
+        }
+      },
+      "required": [
+        "case",
+        "subsystem",
+        "checks"
+      ]
+    },
+    "Check": {
+      "description": "One validated quantity.",
+      "type": "object",
+      "properties": {
+        "case": {
+          "type": "string"
+        },
+        "limit": {
+          "description": "Pass when `value <= limit`.",
+          "type": "number",
+          "format": "double"
+        },
+        "metric": {
+          "type": "string"
+        },
+        "pass": {
+          "type": "boolean"
+        },
+        "value": {
+          "type": "number",
+          "format": "double"
+        }
+      },
+      "required": [
+        "case",
+        "metric",
+        "value",
+        "limit",
+        "pass"
       ]
     },
     "Clearance": {
@@ -404,6 +528,48 @@
         "to",
         "d_from_mm",
         "d_to_mm"
+      ]
+    },
+    "HoldComparison": {
+      "description": "A steady hold of a calibrated recording set against a render of the same engine speed at\nthe same place, band by band. Recordings validate; nothing here is fed back into an input.",
+      "type": "object",
+      "properties": {
+        "bands": {
+          "type": "array",
+          "items": {
+            "$ref": "#/$defs/BandComparison"
+          }
+        },
+        "rpm": {
+          "description": "Engine speed over the hold: mean and standard deviation, rpm.",
+          "type": "number",
+          "format": "double"
+        },
+        "rpm_estimated": {
+          "description": "Engine speed estimated from the recording, without a log.",
+          "type": "boolean"
+        },
+        "rpm_spread": {
+          "type": "number",
+          "format": "double"
+        },
+        "window_s": {
+          "description": "The hold, s from the recording's start.",
+          "type": "array",
+          "items": {
+            "type": "number",
+            "format": "double"
+          },
+          "maxItems": 2,
+          "minItems": 2
+        }
+      },
+      "required": [
+        "window_s",
+        "rpm",
+        "rpm_spread",
+        "rpm_estimated",
+        "bands"
       ]
     },
     "InputUse": {

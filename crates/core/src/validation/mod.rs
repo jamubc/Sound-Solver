@@ -12,12 +12,13 @@ pub mod render;
 pub mod sod;
 pub mod steady;
 
+use schemars::JsonSchema;
 use serde::Serialize;
 
 use crate::error::Result;
 
 /// One validated quantity.
-#[derive(Clone, Debug, Serialize)]
+#[derive(Clone, Debug, Serialize, JsonSchema)]
 pub struct Check {
     pub case: String,
     pub metric: String,
@@ -71,6 +72,26 @@ pub const PENDING: [(&str, &str); 6] = [
         "K against Miller's charts (Idelchik's, implemented, is checked in 'steady')",
     ),
 ];
+
+/// The subsystem a case verifies: `propagation` (the 1D solver and every element) or
+/// `radiation` (the open end and the render's radiation to listeners). Nothing verifies the
+/// engine source against an analytic answer (it waits on a measured pressure trace), and flow
+/// noise is not modelled.
+pub fn subsystem(case: &str) -> &'static str {
+    match case {
+        "outlet" | "render" => "radiation",
+        _ => "propagation",
+    }
+}
+
+/// A case run on demand: its checks, or why it did not run.
+#[derive(Clone, Debug, Serialize, JsonSchema)]
+pub struct CaseReport {
+    pub case: String,
+    pub subsystem: String,
+    pub checks: Vec<Check>,
+    pub error: Option<String>,
+}
 
 /// All cases, in the order they are reported.
 pub fn cases() -> Vec<Case> {

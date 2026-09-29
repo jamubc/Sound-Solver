@@ -27,7 +27,8 @@ use serde::Serialize;
 
 use crate::error::{Error, Result};
 use crate::metrics::{DroneReport, drone};
-use crate::project::Project;
+use crate::project::{MicPosition, Project};
+use crate::render::{Listener, Scene};
 
 const FRAME_S: f64 = 0.5;
 const HOP_S: f64 = 0.125;
@@ -255,40 +256,17 @@ pub fn order_tracks(
     if firing.fract() != 0.0 {
         orders.push(firing);
     }
-    let fs = rec.sample_rate;
-    let n = (FRAME_S * fs).round() as usize;
-    if n < 16 || rec.samples.len() < n {
-        return Err(Error::invalid(
-            "the recording is shorter than one 0.5 s analysis frame",
-        ));
-    }
-    let window: Vec<f64> = (0..n)
-        .map(|i| 0.5 - 0.5 * (2.0 * PI * i as f64 / n as f64).cos())
-        .collect();
-    let scale = 2.0 / (n as f64 * window.iter().map(|w| w * w).sum::<f64>());
-    let fft = FftPlanner::new().plan_fft_forward(n);
-    let df = fs / n as f64;
     let bins = ((stop - start) / step).round() as usize + 1;
     let mut sums = vec![vec![(0.0, 0usize); bins]; orders.len()];
-    let hop = ((HOP_S * fs).round() as usize).max(1);
     let mut frames = [0, 0];
-    for begin in (0..=rec.samples.len() - n).step_by(hop) {
+    each_frame(rec, 0.0, f64::INFINITY, |t, power, df| {
         frames[0] += 1;
-        let mut buf: Vec<Complex64> = rec.samples[begin..begin + n]
-            .iter()
-            .zip(&window)
-            .map(|(x, w)| Complex64::new(x * w, 0.0))
-            .collect();
-        fft.process(&mut buf);
-        // Mean square of each one-sided bin.
-        let power: Vec<f64> = buf[..n / 2].iter().map(|c| c.norm_sqr() * scale).collect();
-        let t = (begin as f64 + 0.5 * n as f64) / fs;
         let rpm = match log {
             Some(log) => log.at(t + offset_s),
-            None => estimate_rpm(&power, df, start, stop),
+            None => estimate_rpm(power, df, start, stop),
         };
         let Some(rpm) = rpm.filter(|r| *r >= start - 0.5 * step && *r < stop + 0.5 * step) else {
-            continue;
+            return;
         };
         frames[1] += 1;
         let bin = ((rpm - start) / step).round() as usize;
@@ -304,7 +282,7 @@ pub fn order_tracks(
                 (s.0, s.1) = (s.0 + power[lo..=hi].iter().sum::<f64>(), s.1 + 1);
             }
         }
-    }
+    })?;
     let cal = calibration_db.unwrap_or(0.0);
     let rpms: Vec<f64> = (0..bins).map(|b| start + step * b as f64).collect();
     let orders: Vec<OrderTrack> = orders
@@ -338,6 +316,47 @@ pub fn order_tracks(
         rpm_estimated: log.is_none(),
         frames,
     })
+}
+
+/// Calls `f(t, power, df)` for each Hann-windowed frame (`FRAME_S` long, every `HOP_S`) of
+/// `rec` lying within `[t0, t1]` s: its centre time, its one-sided mean-square spectrum and the
+/// bin spacing, Hz.
+fn each_frame(
+    rec: &Recording,
+    t0: f64,
+    t1: f64,
+    mut f: impl FnMut(f64, &[f64], f64),
+) -> Result<()> {
+    let fs = rec.sample_rate;
+    let n = (FRAME_S * fs).round() as usize;
+    if n < 16 || rec.samples.len() < n {
+        return Err(Error::invalid(
+            "the recording is shorter than one 0.5 s analysis frame",
+        ));
+    }
+    let window = hann(n);
+    let scale = 2.0 / (n as f64 * window.iter().map(|w| w * w).sum::<f64>());
+    let fft = FftPlanner::new().plan_fft_forward(n);
+    let hop = ((HOP_S * fs).round() as usize).max(1);
+    let first = (t0 * fs).max(0.0).ceil() as usize;
+    let last = ((t1 * fs).min(rec.samples.len() as f64) as usize).saturating_sub(n);
+    for begin in (first..=last).step_by(hop) {
+        let mut buf: Vec<Complex64> = rec.samples[begin..begin + n]
+            .iter()
+            .zip(&window)
+            .map(|(x, w)| Complex64::new(x * w, 0.0))
+            .collect();
+        fft.process(&mut buf);
+        let power: Vec<f64> = buf[..n / 2].iter().map(|c| c.norm_sqr() * scale).collect();
+        f((begin as f64 + 0.5 * n as f64) / fs, &power, fs / n as f64);
+    }
+    Ok(())
+}
+
+fn hann(n: usize) -> Vec<f64> {
+    (0..n)
+        .map(|i| 0.5 - 0.5 * (2.0 * PI * i as f64 / n as f64).cos())
+        .collect()
 }
 
 /// Engine speed whose orders 1–8 carry the most log-power in a frame's one-sided power
@@ -483,6 +502,212 @@ fn bands(points: &[(f64, f64, f64)]) -> Result<Vec<[f64; 2]>> {
         ));
     }
     Ok(gain)
+}
+
+/// Pascals per unit of a recording calibrated so a full-scale sine is `calibration_db` dB re
+/// 20 µPa.
+fn pa_per_unit(calibration_db: f64) -> f64 {
+    std::f64::consts::SQRT_2 * 20e-6 * 10f64.powf(calibration_db / 20.0)
+}
+
+/// Engine speed over `[t0, t1]` s of `rec`: mean and standard deviation, rpm, from `log` read
+/// `offset_s` after the recording's start, else estimated frame by frame over `lo..=hi`
+/// (`true` when estimated).
+pub fn hold_rpm(
+    rec: &Recording,
+    log: Option<&RpmLog>,
+    offset_s: f64,
+    [t0, t1]: [f64; 2],
+    [lo, hi]: [f64; 2],
+) -> Result<(f64, f64, bool)> {
+    let length = rec.samples.len() as f64 / rec.sample_rate;
+    if !(t0 >= 0.0 && t1 > t0 && t1 <= length) {
+        return Err(Error::invalid(format!(
+            "the hold must lie within the recording's {length:.1} s"
+        )));
+    }
+    let speeds: Vec<f64> = match log {
+        Some(log) => (0..=100)
+            .filter_map(|i| log.at(t0 + (t1 - t0) * i as f64 / 100.0 + offset_s))
+            .collect(),
+        None => {
+            let mut v = Vec::new();
+            each_frame(rec, t0, t1, |_, power, df| {
+                v.extend(estimate_rpm(power, df, lo, hi));
+            })?;
+            v
+        }
+    };
+    if speeds.is_empty() {
+        return Err(Error::invalid("no engine speed over the hold"));
+    }
+    let n = speeds.len() as f64;
+    let mean = speeds.iter().sum::<f64>() / n;
+    let spread = (speeds.iter().map(|s| (s - mean).powi(2)).sum::<f64>() / n).sqrt();
+    Ok((mean, spread, log.is_none()))
+}
+
+/// Mean square of `x` (sampled at `fs`) in each ⅓-octave band (`render::third_octaves`),
+/// Hann-windowed over its whole length; `None` above the Nyquist frequency.
+pub fn band_mean_squares(x: &[f64], fs: f64) -> Vec<Option<f64>> {
+    let n = x.len().max(2);
+    let window = hann(n);
+    let scale = 2.0 / (n as f64 * window.iter().map(|w| w * w).sum::<f64>());
+    let mut buf: Vec<Complex64> = x
+        .iter()
+        .zip(&window)
+        .map(|(v, w)| Complex64::new(v * w, 0.0))
+        .collect();
+    buf.resize(n, Complex64::new(0.0, 0.0));
+    FftPlanner::new().plan_fft_forward(n).process(&mut buf);
+    let df = fs / n as f64;
+    crate::render::third_octaves()
+        .into_iter()
+        .map(|(_, lo, hi)| {
+            (hi <= 0.5 * fs).then(|| {
+                buf[1..n / 2]
+                    .iter()
+                    .enumerate()
+                    .filter(|(k, _)| (lo..hi).contains(&((k + 1) as f64 * df)))
+                    .map(|(_, c)| c.norm_sqr() * scale)
+                    .sum()
+            })
+        })
+        .collect()
+}
+
+/// The scene a hold is checked against: the hold's engine speed on the project's load line,
+/// heard where the recording was made, for as long as the hold (1 to 4 s).
+pub fn hold_scene(rpm: f64, window_s: [f64; 2], position: MicPosition) -> Scene {
+    Scene {
+        duration_s: (window_s[1] - window_s[0]).clamp(1.0, 4.0),
+        rpm: vec![[0.0, rpm]],
+        map_kpa: None,
+        listener: match position {
+            MicPosition::Exterior => Listener::Receiver,
+            MicPosition::Interior => Listener::Cabin,
+        },
+    }
+}
+
+/// A steady hold of a calibrated recording set against a render of the same engine speed at
+/// the same place, band by band. Recordings validate; nothing here is fed back into an input.
+#[derive(Clone, Debug, PartialEq, Serialize, JsonSchema)]
+pub struct HoldComparison {
+    /// The hold, s from the recording's start.
+    pub window_s: [f64; 2],
+    /// Engine speed over the hold: mean and standard deviation, rpm.
+    pub rpm: f64,
+    pub rpm_spread: f64,
+    /// Engine speed estimated from the recording, without a log.
+    pub rpm_estimated: bool,
+    pub bands: Vec<BandComparison>,
+}
+
+#[derive(Clone, Debug, PartialEq, Serialize, JsonSchema)]
+pub struct BandComparison {
+    pub center_hz: f64,
+    /// Measured level, dB re 20 µPa, corrected for the background when one is given; `None`
+    /// where the recording cannot give it.
+    pub measured_db: Option<f64>,
+    pub predicted_db: Option<f64>,
+    /// Predicted less measured, dB.
+    pub error_db: Option<f64>,
+    /// Indicative target, ± dB (shown, not passed or failed): 3 up to 2 kHz, 5 above.
+    pub target_db: f64,
+    /// The render resolves this band.
+    pub resolved: bool,
+    /// Why the measured level is missing or corrected.
+    pub note: Option<String>,
+}
+
+/// Dynamic range of a 16-bit recording, dB: a band further below full scale is not resolved.
+const RESOLUTION_DB: f64 = 96.0;
+
+/// `rec` over `window_s`, calibrated at `calibration_db`, against `predicted` (Pa, sampled at
+/// `predicted_fs`) band by band, with `resolved` the render's band status. A band more than
+/// the 16-bit range below full scale is left out. With a background recording (and its
+/// calibration) each band is corrected energy-wise where it stands 6–10 dB above the
+/// background and left out below 6 dB.
+pub fn compare_hold(
+    rec: &Recording,
+    calibration_db: f64,
+    window_s: [f64; 2],
+    background: Option<(&Recording, f64)>,
+    predicted: &[f32],
+    predicted_fs: f64,
+    resolved: &[bool],
+) -> Vec<BandComparison> {
+    let fs = rec.sample_rate;
+    let seg = &rec.samples[(window_s[0] * fs) as usize..(window_s[1] * fs) as usize];
+    let db = |ms: Option<f64>, per_unit: f64| {
+        ms.filter(|m| *m > 0.0)
+            .map(|m| 10.0 * (m * per_unit * per_unit / 4e-10).log10())
+    };
+    let measured = band_mean_squares(seg, fs);
+    let noise = background.map(|(b, cal)| {
+        (
+            band_mean_squares(&b.samples, b.sample_rate),
+            pa_per_unit(cal),
+        )
+    });
+    let per_unit = pa_per_unit(calibration_db);
+    let pred: Vec<f64> = predicted.iter().map(|&v| v as f64).collect();
+    let predicted = band_mean_squares(&pred, predicted_fs);
+    crate::render::third_octaves()
+        .into_iter()
+        .enumerate()
+        .map(|(b, (center_hz, _, _))| {
+            let mut level = db(measured[b], per_unit);
+            let mut note = level.is_none().then(|| {
+                if measured[b].is_none() {
+                    "above the recording's Nyquist frequency".to_string()
+                } else {
+                    "nothing recorded in the band".to_string()
+                }
+            });
+            if level.is_some_and(|l| l < calibration_db - RESOLUTION_DB) {
+                level = None;
+                note = Some("below the recording's resolution".into());
+            }
+            if let (Some(l), Some((bg, bg_unit))) = (level, &noise) {
+                match db(bg[b], *bg_unit) {
+                    Some(n) if l - n < 6.0 => {
+                        level = None;
+                        note = Some(format!("only {:.1} dB above the background", l - n));
+                    }
+                    Some(n) if l - n < 10.0 => {
+                        level = Some(10.0 * (10f64.powf(l / 10.0) - 10f64.powf(n / 10.0)).log10());
+                        note = Some(format!(
+                            "corrected for the background ({:.1} dB above)",
+                            l - n
+                        ));
+                    }
+                    _ => {}
+                }
+            }
+            let predicted_db = db(predicted[b], 1.0);
+            BandComparison {
+                center_hz,
+                measured_db: level,
+                predicted_db,
+                error_db: level.zip(predicted_db).map(|(m, p)| p - m),
+                target_db: if center_hz <= 2000.0 { 3.0 } else { 5.0 },
+                resolved: resolved.get(b).copied().unwrap_or(false),
+                note,
+            }
+        })
+        .collect()
+}
+
+/// Pressure of `rec` over `window_s`, Pa, calibrated at `calibration_db`.
+pub fn pascals(rec: &Recording, calibration_db: f64, window_s: [f64; 2]) -> Vec<f32> {
+    let fs = rec.sample_rate;
+    let k = pa_per_unit(calibration_db);
+    rec.samples[(window_s[0] * fs) as usize..(window_s[1] * fs) as usize]
+        .iter()
+        .map(|&v| (v * k) as f32)
+        .collect()
 }
 
 #[cfg(test)]
@@ -640,5 +865,68 @@ mod tests {
             RpmLog::parse("0,800\n2,1200\n").unwrap().at(1.0),
             Some(1000.0)
         );
+    }
+
+    /// A 94 dB tone recorded at a calibration of 100 dB for full scale reads 94 dB in its band;
+    /// the same tone predicted in pascals agrees; a background 8 dB down is removed energy-wise
+    /// and one 3 dB down leaves the band out.
+    #[test]
+    fn a_hold_compares_band_by_band() {
+        let fs = 48_000.0;
+        let tone = |amplitude: f64| -> Vec<f64> {
+            (0..96_000)
+                .map(|i| amplitude * (2.0 * PI * 1000.0 * i as f64 / fs).sin())
+                .collect()
+        };
+        // 94 dB is 1 Pa RMS: √2 Pa peak, at 100 dB full scale a full-scale sine is 2 Pa RMS.
+        let rec = Recording {
+            sample_rate: fs,
+            samples: tone(0.5),
+        };
+        let predicted: Vec<f32> = tone(std::f64::consts::SQRT_2)
+            .iter()
+            .map(|&v| v as f32)
+            .collect();
+        let bands = crate::render::third_octaves();
+        let k = bands.iter().position(|b| b.0 == 1000.0).unwrap();
+        let resolved = vec![true; bands.len()];
+        let c = compare_hold(&rec, 100.0, [0.5, 1.5], None, &predicted, fs, &resolved);
+        assert!(
+            (c[k].measured_db.unwrap() - 94.0).abs() < 0.05,
+            "{:?}",
+            c[k]
+        );
+        assert!(c[k].error_db.unwrap().abs() < 0.05, "{:?}", c[k]);
+        let quiet = |db_down: f64| Recording {
+            sample_rate: fs,
+            samples: tone(0.5 * 10f64.powf(-db_down / 20.0)),
+        };
+        let bg = quiet(8.0);
+        let c = compare_hold(
+            &rec,
+            100.0,
+            [0.5, 1.5],
+            Some((&bg, 100.0)),
+            &predicted,
+            fs,
+            &resolved,
+        );
+        let expected = 10.0 * (10f64.powf(9.4) - 10f64.powf(8.6)).log10();
+        assert!(
+            (c[k].measured_db.unwrap() - expected).abs() < 0.05,
+            "{:?}",
+            c[k]
+        );
+        let bg = quiet(3.0);
+        let c = compare_hold(
+            &rec,
+            100.0,
+            [0.5, 1.5],
+            Some((&bg, 100.0)),
+            &predicted,
+            fs,
+            &resolved,
+        );
+        assert_eq!(c[k].measured_db, None);
     }
 }

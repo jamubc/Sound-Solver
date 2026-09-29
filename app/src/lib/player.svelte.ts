@@ -217,6 +217,24 @@ export async function play(which: Which) {
   }
 }
 
+/** Plays a clip of pressure with `peakPa` at 0.9 of full scale; `stop` ends it. */
+export async function playClip(samples: Float32Array, sampleRate: number, peakPa: number) {
+  stop();
+  context ??= new AudioContext();
+  await context.resume();
+  const buffer = context.createBuffer(1, samples.length, sampleRate);
+  const out = buffer.getChannelData(0);
+  const scale = 0.9 / Math.max(peakPa, 1e-9);
+  for (let k = 0; k < out.length; k++) out[k] = samples[k] * scale;
+  gain = context.createGain();
+  gain.gain.value = player.volume;
+  gain.connect(context.destination);
+  source = context.createBufferSource();
+  source.buffer = buffer;
+  source.connect(gain);
+  source.start();
+}
+
 export function stop() {
   source?.stop();
   source?.disconnect();

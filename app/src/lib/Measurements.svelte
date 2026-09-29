@@ -6,6 +6,7 @@
   import { backend } from './backend';
   import { db, fileName, ORDER_COLOURS, rpm } from './format';
   import Plot from './Plot.svelte';
+  import Validation from './Validation.svelte';
   import type { Chip } from './provenance';
   import { app, editMeasurements } from './state.svelte';
   import type { DroneReport, OrderTracks } from './types/api';
@@ -294,6 +295,7 @@
       <button onclick={measure} disabled={measuring || !impulse.exterior || !impulse.interior}>Measure</button>
     {/if}
   </section>
+  <Validation />
   {#if failure}<p class="failure">{failure}</p>{/if}
 </div>
 

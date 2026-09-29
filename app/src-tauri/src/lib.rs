@@ -15,13 +15,14 @@ use exhaust_core::audio;
 use exhaust_core::fabricate::{self, Package};
 use exhaust_core::layout::{Layout, layout};
 use exhaust_core::manifest::{self, Manifest};
-use exhaust_core::measure::{self, OrderTracks, Recording, RpmLog};
+use exhaust_core::measure::{self, HoldComparison, OrderTracks, Recording, RpmLog};
 use exhaust_core::metrics::{Metrics, OrderDifference};
 use exhaust_core::project::{CabinTf, CabinTfMethod, Project};
 use exhaust_core::render::{RenderProgress, Scene};
 use exhaust_core::scan::{self, Clearance, Mesh};
 use exhaust_core::solve::{self, CycleProgress, Line, PointOutcome, SolverKind, SweepResult};
 use exhaust_core::tune::{self, Tuning};
+use exhaust_core::validation::{self, CaseReport};
 use exhaust_core::{edit, metrics};
 use exhaust_jobs::{Job, Output, Progress, Runner};
 use rayon::prelude::*;
@@ -212,8 +213,8 @@ fn file_name(path: &str) -> String {
         .map_or(path.into(), |n| n.to_string_lossy().into())
 }
 
-/// Order tracks of the project's recording `index`.
-fn recording_tracks(project: &Project, index: usize) -> Result<OrderTracks, String> {
+/// The project's recording `index` and its engine-speed log, if it has one.
+fn recording(project: &Project, index: usize) -> Result<(Recording, Option<RpmLog>), String> {
     let spec = project
         .measurements
         .recordings
@@ -227,6 +228,13 @@ fn recording_tracks(project: &Project, index: usize) -> Result<OrderTracks, Stri
         }
         None => None,
     };
+    Ok((rec, log))
+}
+
+/// Order tracks of the project's recording `index`.
+fn recording_tracks(project: &Project, index: usize) -> Result<OrderTracks, String> {
+    let (rec, log) = recording(project, index)?;
+    let spec = &project.measurements.recordings[index];
     measure::order_tracks(
         project,
         &rec,
@@ -379,6 +387,112 @@ async fn render(
             out.extend(s.to_le_bytes());
         }
         Ok(Response::new(out))
+    })
+    .await
+}
+
+/// A steady hold of the project's recording `index` (`window_s`, s from its start) against a
+/// render of the same engine speed where the recording was made (`measure::compare_hold`),
+/// the render through the job runner with its progress streamed; `background`, a recording of
+/// the background taken with the same phone at the same gain. Answers the comparison as JSON
+/// after its byte length (u32; padded with spaces to a multiple of 4), then the recording's
+/// and the render's pressure over the hold, each as its sample rate (f64), its length (u32)
+/// and its samples (f32, Pa), little-endian. `cancel_render` stops it.
+#[tauri::command]
+async fn validate_hold(
+    app: AppHandle,
+    project: Value,
+    index: usize,
+    window_s: [f64; 2],
+    background: Option<PathBuf>,
+    on_progress: Channel<RenderProgress>,
+) -> Result<Response, String> {
+    let project = parse(&project)?;
+    let runner = runner(&app)?;
+    let generation = RENDER.fetch_add(1, Ordering::SeqCst) + 1;
+    blocking(move || {
+        let (rec, log) = recording(&project, index)?;
+        let spec = &project.measurements.recordings[index];
+        let cal = spec
+            .calibration_db
+            .ok_or("calibrate the recording first: the comparison is in dB re 20 µPa")?;
+        let [start, stop, _] = project.operating.sweep_rpm;
+        let (rpm, rpm_spread, rpm_estimated) = measure::hold_rpm(
+            &rec,
+            log.as_ref(),
+            spec.log_offset_s,
+            window_s,
+            [start, stop],
+        )
+        .map_err(|e| e.to_string())?;
+        let job = Job::Render {
+            project: Box::new(project.clone()),
+            scene: measure::hold_scene(rpm, window_s, spec.position),
+        };
+        let out = runner.run(&job, &mut |p| {
+            if let Progress::Render(p) = p {
+                let _ = on_progress.send(p);
+            }
+            RENDER.load(Ordering::SeqCst) == generation
+        })?;
+        let Output::Render { info, channels } = out else {
+            return Err("a render job made no render".into());
+        };
+        let background = background.map(|p| read_recording(&p)).transpose()?;
+        let resolved: Vec<bool> = info.bands.iter().map(|b| b.resolved).collect();
+        let comparison = HoldComparison {
+            window_s,
+            rpm,
+            rpm_spread,
+            rpm_estimated,
+            bands: measure::compare_hold(
+                &rec,
+                cal,
+                window_s,
+                background.as_ref().map(|b| (b, cal)),
+                &channels[0],
+                info.sample_rate,
+                &resolved,
+            ),
+        };
+        let mut json = serde_json::to_vec(&comparison).map_err(|e| e.to_string())?;
+        json.resize(json.len().next_multiple_of(4), b' ');
+        let mut out = (json.len() as u32).to_le_bytes().to_vec();
+        out.extend(&json);
+        for (fs, samples) in [
+            (rec.sample_rate, measure::pascals(&rec, cal, window_s)),
+            (info.sample_rate, channels[0].clone()),
+        ] {
+            out.extend(fs.to_le_bytes());
+            out.extend((samples.len() as u32).to_le_bytes());
+            samples.iter().for_each(|s| out.extend(s.to_le_bytes()));
+        }
+        Ok(Response::new(out))
+    })
+    .await
+}
+
+/// Runs the analytic verification suite, sending each case as it finishes.
+#[tauri::command]
+async fn verify(on_case: Channel<CaseReport>) -> Result<Vec<CaseReport>, String> {
+    blocking(move || {
+        Ok(validation::cases()
+            .par_iter()
+            .map(|(name, run)| {
+                let (checks, error) = match run() {
+                    Ok(checks) => (checks, None),
+                    Err(e) => (Vec::new(), Some(e.to_string())),
+                };
+                let report = CaseReport {
+                    case: name.to_string(),
+                    subsystem: validation::subsystem(name).into(),
+                    checks,
+                    error,
+                };
+                let _ = on_case.send(report.clone());
+                report
+            })
+            .collect())
     })
     .await
 }
@@ -539,7 +653,9 @@ pub fn run() {
             compare,
             listen,
             render,
-            cancel_render
+            cancel_render,
+            validate_hold,
+            verify
         ])
         .run(tauri::generate_context!())
         .expect("error while running the app");

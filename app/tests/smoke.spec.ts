@@ -105,6 +105,14 @@ test('recordings give measured order tracks and the cabin transfer function', as
   await page.screenshot({ path: 'test-results/measurements.png' });
 });
 
+test('the benchmarks run on demand and verify each subsystem', async ({ page }) => {
+  await page.getByRole('tab', { name: 'Measure', exact: true }).click();
+  const verification = page.getByTestId('verification');
+  await verification.getByRole('button', { name: 'Run the benchmarks' }).click();
+  await expect(verification).toContainText('verified: 1 checks pass');
+  await expect(verification).toContainText('not modelled');
+});
+
 test('fabrication lists the parts and takes reference points picked on a scan', async ({ page }) => {
   await page.getByRole('tab', { name: 'Fabricate', exact: true }).click();
   await expect(page.getByTestId('parts')).toContainText('rear-pipe/B1');
