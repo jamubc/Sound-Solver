@@ -44,7 +44,7 @@ const MARGIN: usize = 5;
 
 /// The straight-pipe case, mid-pipe at the downpipe's bore, with its reducer replaced by
 /// `element` if given.
-fn project(element: Option<Value>) -> Result<Project> {
+pub(super) fn project(element: Option<Value>) -> Result<Project> {
     let mut p: Value = serde_json::from_str(STRAIGHT_PIPE).expect("valid case JSON");
     let sys = &mut p["system"];
     if let Some(mut el) = element {

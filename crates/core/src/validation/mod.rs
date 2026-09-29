@@ -41,6 +41,36 @@ impl Check {
 /// A validation case: name and the function that runs it.
 pub type Case = (&'static str, fn() -> Result<Vec<Check>>);
 
+/// Directive rows that need data this build does not have, with what each needs. Reported by
+/// `exhaustctl validate`; neither passed nor failed.
+pub const PENDING: [(&str, &str); 6] = [
+    (
+        "Thermal profile",
+        "tailpipe gas temperature within 30 K of a thermocouple on the reference car, 2000 rpm cruise",
+    ),
+    (
+        "Reference-car baseline",
+        "2nd-order peak ±5 Hz and level ±3 dB of an ISO 5130 recording at three speeds; \
+         backpressure ±15 % of a manometer at the downpipe flange",
+    ),
+    (
+        "Turbine",
+        "post-turbo pulse amplitude against a measured trace",
+    ),
+    (
+        "Engine cylinder",
+        "cylinder pressure against a measured trace",
+    ),
+    (
+        "Catalyst",
+        "ΔP against published brick data (the analytic model is checked in 'steady')",
+    ),
+    (
+        "Bend",
+        "K against Miller's charts (Idelchik's, implemented, is checked in 'steady')",
+    ),
+];
+
 /// All cases, in the order they are reported.
 pub fn cases() -> Vec<Case> {
     vec![
@@ -52,6 +82,7 @@ pub fn cases() -> Vec<Case> {
         ("open-pipe-fourpole", acoustic::open_pipe_fourpole),
         ("area-change", acoustic::area_change),
         ("chamber", acoustic::expansion_chamber),
+        ("extended-chamber", acoustic::extended_chamber),
         ("stub", acoustic::quarter_wave_stub),
         ("helmholtz", acoustic::helmholtz),
         ("tee", acoustic::tee_junction),

@@ -16,7 +16,11 @@
 
 use std::f64::consts::PI;
 
+use rustfft::num_complex::Complex64;
+use serde_json::json;
+
 use super::Check;
+use crate::engine::EvoState;
 use crate::error::Result;
 use crate::fourpole::{self, MeanState};
 use crate::gas::Gas;
@@ -24,11 +28,13 @@ use crate::gas1d::{
     CharacteristicBc, Duct, JunctionBc, JunctionKind, Limiter, Network, Node, Port, Signal,
     Simulation,
 };
+use crate::model::{self, SourceInputs};
 use crate::spectrum::fourier_integral;
 
 const P0: f64 = 101_325.0;
 const T_AIR: f64 = 293.15;
 const DX: f64 = 0.005;
+const DX_FINE: f64 = 0.0025;
 const SIGMA: f64 = 5e-5;
 
 fn area(d: f64) -> f64 {
@@ -252,6 +258,133 @@ pub fn expansion_chamber() -> Result<Vec<Check>> {
             "time-domain max |TL error|, dB (50–1500 Hz)",
             td_err,
             1.0,
+        ),
+    ])
+}
+
+/// Expansion chamber with extended inlet and outlet tubes, built from a project as in a solve
+/// (`elements::chamber`; straight-pipe case, reducer swapped for the chamber), against
+/// plane-wave theory (Munjal 2014, extended-tube chambers): each tube end is a junction with
+/// the annular cavity around the tube, a closed side branch `−j (ρc/S_a) cot(kl)`, and between
+/// the tube ends the chamber is a uniform duct. The cavities' quarter-wave resonances put TL
+/// poles at `c/(4l)`: TL is compared where the theory gives under 30 dB, and the outlet
+/// cavity's pole (in band) is located like the stub's notch. Δx = 2.5 mm: the sharp
+/// transmission maximum near 1.15 kHz converges at second order (time-domain error 2.8, 0.76,
+/// 0.20 dB at 5, 2.5, 1.25 mm).
+pub fn extended_chamber() -> Result<Vec<Check>> {
+    type M = [[Complex64; 2]; 2];
+    let (dc, length, e_in, e_out) = (0.15, 0.3, 0.05, 0.1);
+    let mut project = super::steady::project(Some(json!({
+        "type": "expansion_chamber",
+        "diameter_mm": dc * 1e3,
+        "length_mm": length * 1e3,
+        "inlet_extension_mm": e_in * 1e3,
+        "outlet_extension_mm": e_out * 1e3,
+    })))?;
+    project.solver.dx_mm = DX_FINE * 1e3;
+    let gas = Gas::perfect(1.4, 287.05);
+    let src = SourceInputs {
+        rpm: 3000.0,
+        evo: EvoState {
+            pressure_pa: 3e5,
+            temperature_k: 1200.0,
+        },
+        p_init: P0,
+        t_init: T_AIR,
+    };
+    let model = model::build(&project, gas.clone(), DX_FINE, src)?;
+    let (inlet, outlet) = (model.source_node, model.outlets[0].node);
+    let mut net = model.network;
+    for d in &mut net.ducts {
+        d.friction = false;
+    }
+    let end = |port: Port, incoming: Signal| {
+        Node::Characteristic(CharacteristicBc {
+            port,
+            p_ref: P0,
+            t_ref: T_AIR,
+            incoming,
+        })
+    };
+    let incident = Signal::Gaussian {
+        amplitude: 2.0,
+        t0: 6.0 * SIGMA,
+        sigma: SIGMA,
+    };
+    net.nodes[inlet] = end(net.nodes[inlet].ports()[0], incident);
+    net.nodes[outlet] = end(net.nodes[outlet].ports()[0], Signal::Zero);
+    let temps = vec![T_AIR; net.ducts.len()];
+    let r = Rig {
+        net,
+        inlet,
+        outlets: vec![outlet],
+    };
+
+    let (c, rho) = (gas.sound_speed(T_AIR), P0 / (gas.r() * T_AIR));
+    let pipe = &project.system.routes[0].pipe;
+    let (s1, sc, sa) = (
+        area(pipe.id_m()),
+        area(dc),
+        area(dc) - area(pipe.od_mm * 1e-3),
+    );
+    let exact = |f: f64| {
+        let k = 2.0 * PI * f / c;
+        let (one, zero, j) = (
+            Complex64::new(1.0, 0.0),
+            Complex64::new(0.0, 0.0),
+            Complex64::new(0.0, 1.0),
+        );
+        let mul = |a: &M, b: &M| -> M {
+            [0, 1].map(|r| [0, 1].map(|s| a[r][0] * b[0][s] + a[r][1] * b[1][s]))
+        };
+        let shunt = |l: f64| -> M { [[one, zero], [j * sa * (k * l).tan() / (rho * c), one]] };
+        let (lc, zc) = (length - e_in - e_out, rho * c / sc);
+        let (cs, sn) = ((k * lc).cos(), (k * lc).sin());
+        let duct: M = [[one * cs, j * zc * sn], [j * sn / zc, one * cs]];
+        let t = mul(&mul(&shunt(e_in), &duct), &shunt(e_out));
+        let z1 = rho * c / s1;
+        20.0 * ((t[0][0] + t[0][1] / z1 + z1 * t[1][0] + t[1][1]).norm() / 2.0).log10()
+    };
+    let mean = MeanState::quiescent(&r.net, P0, T_AIR);
+    let rec = pulse(&r, &temps, 0.25)?;
+    let (mut fp_err, mut td_err) = (0.0f64, 0.0f64);
+    let mut f = 50.0;
+    while f <= 1500.0 {
+        let tl = exact(f);
+        if tl < 30.0 {
+            fp_err = fp_err.max((fp_tl(&r, &mean, f)? - tl).abs());
+            td_err = td_err.max((td_tl(&r, &rec, f) - tl).abs());
+        }
+        f += 10.0;
+    }
+    let pole = c / (4.0 * e_out);
+    let fp_pole = tl_peak(|f| fp_tl(&r, &mean, f).unwrap_or(f64::NAN), pole);
+    let td_pole = tl_peak(|f| td_tl(&r, &rec, f), pole);
+    let case = "Extended-tube chamber TL (plane-wave theory)";
+    Ok(vec![
+        Check::new(
+            case,
+            "four-pole max |TL error| where under 30 dB, dB (50–1500 Hz)",
+            fp_err,
+            1.0,
+        ),
+        Check::new(
+            case,
+            "time-domain max |TL error| where under 30 dB, dB (50–1500 Hz)",
+            td_err,
+            1.0,
+        ),
+        Check::new(
+            case,
+            format!("four-pole outlet-cavity pole relative error ({pole:.1} Hz)"),
+            (fp_pole / pole - 1.0).abs(),
+            0.01,
+        ),
+        Check::new(
+            case,
+            format!("time-domain outlet-cavity pole relative error ({pole:.1} Hz)"),
+            (td_pole / pole - 1.0).abs(),
+            0.01,
         ),
     ])
 }

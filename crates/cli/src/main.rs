@@ -7,7 +7,7 @@ use std::process::ExitCode;
 use clap::{Parser, Subcommand, ValueEnum};
 use exhaust_core::project::{Project, sweep_points};
 use exhaust_core::solve::{SolverKind, sweep};
-use exhaust_core::validation::cases;
+use exhaust_core::validation::{PENDING, cases};
 
 #[derive(Clone, Copy, ValueEnum)]
 enum Solver {
@@ -122,9 +122,17 @@ fn run(cli: Cli) -> Result<ExitCode, String> {
             }
             ok &= all.iter().all(|c| c.pass);
             if json {
+                let pending: Vec<_> = PENDING
+                    .iter()
+                    .map(|(case, needs)| serde_json::json!({ "case": case, "needs": needs }))
+                    .collect();
                 println!(
                     "{}",
-                    serde_json::to_string_pretty(&all).expect("checks serialise")
+                    serde_json::to_string_pretty(&serde_json::json!({
+                        "checks": all,
+                        "pending": pending,
+                    }))
+                    .expect("checks serialise")
                 );
             } else {
                 for c in &all {
@@ -136,6 +144,11 @@ fn run(cli: Cli) -> Result<ExitCode, String> {
                         c.value,
                         c.limit
                     );
+                }
+                if only.is_empty() {
+                    for (case, needs) in PENDING {
+                        println!("pend {case:<26} needs {needs}");
+                    }
                 }
                 println!(
                     "{}",
