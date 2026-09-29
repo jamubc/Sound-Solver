@@ -5,11 +5,12 @@ use std::path::{Path, PathBuf};
 use std::process::ExitCode;
 
 use clap::{Parser, Subcommand, ValueEnum};
+use exhaust_core::audio;
 use exhaust_core::layout::layout;
 use exhaust_core::measure::{self, OrderTracks, Recording, RpmLog};
 use exhaust_core::project::{CabinTf, CabinTfMethod, Project, RecordingRef, sweep_points};
 use exhaust_core::scan::{self, Mesh};
-use exhaust_core::solve::{PointOutcome, SolverKind, sweep};
+use exhaust_core::solve::{Line, PointOutcome, SolverKind, sweep};
 use exhaust_core::tune::tune;
 use exhaust_core::validation::{PENDING, cases};
 use exhaust_core::{fabricate, manifest, metrics, solid};
@@ -128,6 +129,31 @@ enum Command {
         project: PathBuf,
         a: PathBuf,
         b: PathBuf,
+    },
+    /// Write the predicted sound at the receiver to a WAV: a steady engine speed, or a run-up.
+    Listen {
+        /// Project file (JSON).
+        project: PathBuf,
+        /// A steady engine speed, rpm.
+        #[arg(long, conflicts_with_all = ["from", "to"])]
+        rpm: Option<f64>,
+        /// Run-up from this speed (default: the project's sweep start), rpm.
+        #[arg(long)]
+        from: Option<f64>,
+        /// Run-up to this speed (default: the project's sweep end), rpm.
+        #[arg(long)]
+        to: Option<f64>,
+        /// Length, s (a steady sound is at least this long, in whole engine cycles).
+        #[arg(long, default_value_t = 10.0)]
+        seconds: f64,
+        #[arg(long, value_enum, default_value = "time-domain")]
+        solver: Solver,
+        /// Through the project's measured cabin transfer function.
+        #[arg(long)]
+        interior: bool,
+        /// WAV file to write (16-bit, peak at 0.9 of full scale).
+        #[arg(long, short)]
+        out: PathBuf,
     },
     /// Run the analytic validation suite; exits non-zero if any check fails.
     Validate {
@@ -335,6 +361,76 @@ fn run(cli: Cli) -> Result<ExitCode, String> {
             )?;
             Ok(ExitCode::SUCCESS)
         }
+        Command::Listen {
+            project,
+            rpm,
+            from,
+            to,
+            seconds,
+            solver,
+            interior,
+            out,
+        } => {
+            let project = read_project(&project)?;
+            let [start, stop, step] = project.operating.sweep_rpm;
+            let (lo, hi) = match rpm {
+                Some(r) => (r, r),
+                None => (from.unwrap_or(start), to.unwrap_or(stop)),
+            };
+            // The solved speeds the sound needs: the steady one, or the sweep across the run-up
+            // and one step beyond each end.
+            let rpms: Vec<f64> = match rpm {
+                Some(r) => vec![r],
+                None => project
+                    .operating
+                    .sweep()
+                    .into_iter()
+                    .filter(|r| *r >= lo.min(hi) - step && *r <= lo.max(hi) + step)
+                    .collect(),
+            };
+            let kind = match solver {
+                Solver::TimeDomain => SolverKind::TimeDomain,
+                Solver::FourPole => SolverKind::FourPole,
+            };
+            let mut solved: Vec<(f64, Vec<Line>)> = sweep(&project, &rpms, kind)
+                .points
+                .into_iter()
+                .filter_map(|p| match p {
+                    PointOutcome::Solved(r) => Some((r.rpm, r.spectrum)),
+                    PointOutcome::Failed { .. } => None,
+                })
+                .collect();
+            solved.sort_by(|a, b| a.0.total_cmp(&b.0));
+            let cabin = project.measurements.cabin_tf.as_ref();
+            if interior && cabin.is_none() {
+                return Err("the project has no measured cabin transfer function".into());
+            }
+            let gain = |f: f64| match cabin {
+                Some(tf) if interior => tf.at(f),
+                _ => Some(0.0),
+            };
+            let sound =
+                audio::synthesize(&solved, lo, hi, seconds, &gain).map_err(|e| e.to_string())?;
+            write_wav(&out, &sound)?;
+            let square: f64 = sound.samples.iter().map(|&s| (s as f64).powi(2)).sum();
+            let level = |pa: f64| 20.0 * (pa / 20e-6).log10();
+            eprintln!(
+                "wrote {}: {:.1} s, Leq {:.1} dB, peak {:.1} dB re 20 µPa{}",
+                out.display(),
+                sound.samples.len() as f64 / sound.sample_rate,
+                level((square / sound.samples.len().max(1) as f64).sqrt()),
+                level(sound.peak_pa),
+                if sound.dropped > 0 {
+                    format!(
+                        ", {} orders outside the cabin measurement left out",
+                        sound.dropped
+                    )
+                } else {
+                    String::new()
+                }
+            );
+            Ok(ExitCode::SUCCESS)
+        }
         Command::Validate { json, cases: only } => {
             let mut all = Vec::new();
             let mut ok = true;
@@ -416,6 +512,29 @@ fn read_scan(project_path: &Path, project: &Project) -> Result<Option<Mesh>, Str
     Mesh::parse(&scan.path, &bytes)
         .map(Some)
         .map_err(|e| format!("{}: {e}", file.display()))
+}
+
+/// 16-bit mono WAV of `sound`, its peak at 0.9 of full scale; the sample rate rounded to 1 Hz.
+fn write_wav(path: &Path, sound: &audio::Sound) -> Result<(), String> {
+    let scale = if sound.peak_pa > 0.0 {
+        0.9 / sound.peak_pa
+    } else {
+        0.0
+    };
+    let (rate, n) = (sound.sample_rate.round() as u32, sound.samples.len() as u32);
+    let mut b = b"RIFF".to_vec();
+    b.extend((36 + 2 * n).to_le_bytes());
+    b.extend(b"WAVEfmt ");
+    b.extend(16u32.to_le_bytes());
+    b.extend([1u16, 1].iter().flat_map(|x| x.to_le_bytes()));
+    b.extend([rate, 2 * rate].iter().flat_map(|x| x.to_le_bytes()));
+    b.extend([2u16, 16].iter().flat_map(|x| x.to_le_bytes()));
+    b.extend(b"data");
+    b.extend((2 * n).to_le_bytes());
+    for &s in &sound.samples {
+        b.extend(((s as f64 * scale * 32767.0).round() as i16).to_le_bytes());
+    }
+    std::fs::write(path, b).map_err(|e| format!("{}: {e}", path.display()))
 }
 
 fn file_name(path: &Path) -> String {

@@ -1,5 +1,6 @@
 //! `exhaust-core`: gas dynamics and acoustics of vehicle exhaust systems.
 
+pub mod audio;
 pub mod edit;
 pub mod elements;
 pub mod engine;

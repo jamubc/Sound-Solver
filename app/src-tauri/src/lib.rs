@@ -9,6 +9,7 @@
 use std::path::{Path, PathBuf};
 use std::sync::atomic::{AtomicU64, Ordering};
 
+use exhaust_core::audio;
 use exhaust_core::fabricate::{self, Package};
 use exhaust_core::layout::{Layout, layout};
 use exhaust_core::manifest::{self, Manifest};
@@ -16,7 +17,7 @@ use exhaust_core::measure::{self, OrderTracks, Recording, RpmLog};
 use exhaust_core::metrics::{Metrics, OrderDifference};
 use exhaust_core::project::{CabinTf, CabinTfMethod, Project};
 use exhaust_core::scan::{self, Clearance, Mesh};
-use exhaust_core::solve::{self, CycleProgress, PointOutcome, SolverKind, SweepResult};
+use exhaust_core::solve::{self, CycleProgress, Line, PointOutcome, SolverKind, SweepResult};
 use exhaust_core::tune::{self, Tuning};
 use exhaust_core::{edit, metrics};
 use rayon::prelude::*;
@@ -273,6 +274,54 @@ async fn cabin_tf_impulse(exterior: PathBuf, interior: PathBuf) -> Result<CabinT
     .await
 }
 
+/// The receiver sound of solved `points` as the engine goes from `from_rpm` to `to_rpm` over
+/// `seconds` (a seamless loop at one speed), outside or through the cabin transfer function
+/// (`audio::synthesize`): sample rate and peak pressure (f64), orders left out (u32), then the
+/// pressure (f32, Pa), little-endian.
+#[tauri::command]
+async fn listen(
+    project: Value,
+    points: Vec<PointOutcome>,
+    from_rpm: f64,
+    to_rpm: f64,
+    seconds: f64,
+    interior: bool,
+) -> Result<Response, String> {
+    let project = parse(&project)?;
+    blocking(move || {
+        let mut solved: Vec<(f64, Vec<Line>)> = points
+            .into_iter()
+            .filter_map(|p| match p {
+                PointOutcome::Solved(r) => Some((r.rpm, r.spectrum)),
+                PointOutcome::Failed { .. } => None,
+            })
+            .collect();
+        solved.sort_by(|a, b| a.0.total_cmp(&b.0));
+        let cabin = project.measurements.cabin_tf.as_ref();
+        if interior && cabin.is_none() {
+            return Err(
+                "no measured cabin transfer function: the cabin is never synthesised".into(),
+            );
+        }
+        let gain = |f: f64| match cabin {
+            Some(tf) if interior => tf.at(f),
+            _ => Some(0.0),
+        };
+        let sound = audio::synthesize(&solved, from_rpm, to_rpm, seconds, &gain)
+            .map_err(|e| e.to_string())?;
+        let mut out = Vec::with_capacity(20 + 4 * sound.samples.len());
+        out.extend(sound.sample_rate.to_le_bytes());
+        out.extend(sound.peak_pa.to_le_bytes());
+        out.extend((sound.dropped as u32).to_le_bytes());
+        sound
+            .samples
+            .iter()
+            .for_each(|s| out.extend(s.to_le_bytes()));
+        Ok(Response::new(out))
+    })
+    .await
+}
+
 /// Sound metrics of solved points under the project's measurements as they are now.
 #[tauri::command]
 fn evaluate(project: Value, points: Vec<PointOutcome>) -> Result<Metrics, String> {
@@ -433,7 +482,8 @@ pub fn run() {
             cabin_tf_orders,
             cabin_tf_impulse,
             evaluate,
-            compare
+            compare,
+            listen
         ])
         .run(tauri::generate_context!())
         .expect("error while running the app");
@@ -470,7 +520,8 @@ mod tests {
                 cabin_tf_orders,
                 cabin_tf_impulse,
                 evaluate,
-                compare
+                compare,
+                listen
             ])
             .build(mock_context(noop_assets()))
             .expect("app builds");
@@ -602,6 +653,19 @@ mod tests {
         )
         .expect("metrics");
         assert_eq!(metrics["firing_order"], 2.0);
+        // Two seconds or more of the preview at 2000 rpm: header, then the pressure.
+        let args = json!({ "project": project, "points": preview["points"], "fromRpm": 2000.0, "toRpm": 2000.0, "seconds": 2.0, "interior": false });
+        let Ok(InvokeResponseBody::Raw(sound)) =
+            get_ipc_response(&webview, request("listen", args))
+        else {
+            panic!("sound as bytes");
+        };
+        let rate = f64::from_le_bytes(sound[..8].try_into().unwrap());
+        let peak = f64::from_le_bytes(sound[8..16].try_into().unwrap());
+        assert!(
+            (sound.len() - 20) / 4 >= (2.0 * rate) as usize && peak > 1.0,
+            "{rate} Hz, {peak} Pa"
+        );
         let differences = call(
             "compare",
             json!({ "project": project, "a": preview["points"], "b": preview["points"] }),
