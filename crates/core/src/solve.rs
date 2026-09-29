@@ -26,6 +26,7 @@ use crate::error::{Error, Result};
 use crate::gas::Gas;
 use crate::gas1d::{Duct, Limiter, Network, Node, Port, Simulation};
 use crate::geometry::{Vec3, add, scale, unit};
+use crate::metrics::{self, Metrics};
 use crate::model::{Model, SourceInputs, build};
 use crate::project::{Project, WallThermal};
 use crate::radiation::{a_weighting_db, monopole_pressure};
@@ -147,6 +148,7 @@ pub struct SweepResult {
     pub project_hash: String,
     pub solver: SolverKind,
     pub points: Vec<PointOutcome>,
+    pub metrics: Metrics,
 }
 
 /// Solves every engine speed in parallel (one Rayon task per point; points are independent,
@@ -172,11 +174,12 @@ pub fn sweep(project: &Project, rpms: &[f64], solver: SolverKind) -> SweepResult
                 },
             }
         })
-        .collect();
+        .collect::<Vec<_>>();
     SweepResult {
         project: project.name.clone(),
         project_hash: project.hash(),
         solver,
+        metrics: metrics::evaluate(project, &points),
         points,
     }
 }

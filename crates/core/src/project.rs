@@ -39,6 +39,60 @@ pub struct Project {
     pub receiver: Receiver,
     pub solver: SolverSettings,
     pub materials: Vec<Material>,
+    #[serde(default, skip_serializing_if = "Measurements::is_empty")]
+    pub measurements: Measurements,
+}
+
+/// Data measured on the vehicle and stored with the project.
+#[derive(Clone, Debug, Default, PartialEq, Serialize, Deserialize, JsonSchema)]
+#[serde(deny_unknown_fields)]
+pub struct Measurements {
+    /// Without it the interior drone is unavailable: the cabin is never synthesised.
+    #[serde(default, skip_serializing_if = "Option::is_none")]
+    pub cabin_tf: Option<CabinTf>,
+}
+
+impl Measurements {
+    pub fn is_empty(&self) -> bool {
+        self.cabin_tf.is_none()
+    }
+}
+
+/// Cabin transfer function: level at the driver's ear minus level at the exterior receiver.
+#[derive(Clone, Debug, PartialEq, Serialize, Deserialize, JsonSchema)]
+#[serde(deny_unknown_fields)]
+pub struct CabinTf {
+    pub method: CabinTfMethod,
+    /// Where and when it was measured.
+    pub source: String,
+    /// `[[frequency_hz, gain_db], …]`, frequency increasing; linear between points, undefined
+    /// outside them.
+    pub gain_db: Vec<[f64; 2]>,
+}
+
+impl CabinTf {
+    /// Gain at `f`, dB; `None` outside the measured range.
+    pub fn at(&self, f: f64) -> Option<f64> {
+        let g = &self.gain_db;
+        let k = g.partition_point(|p| p[0] < f);
+        if k < g.len() && g[k][0] == f {
+            return Some(g[k][1]);
+        }
+        if k == 0 || k == g.len() {
+            return None;
+        }
+        let (a, b) = (g[k - 1], g[k]);
+        Some(a[1] + (b[1] - a[1]) * (f - a[0]) / (b[0] - a[0]))
+    }
+}
+
+#[derive(Clone, Copy, Debug, PartialEq, Eq, Serialize, Deserialize, JsonSchema)]
+#[serde(rename_all = "snake_case")]
+pub enum CabinTfMethod {
+    /// Exterior and interior recordings at the same cruise point; ratio per engine order.
+    OrderRatio,
+    /// Impulse response: clap or balloon at the tailpipe, phone at the driver's ear.
+    Impulse,
 }
 
 /// Where a value comes from.
@@ -753,6 +807,17 @@ impl Project {
             return Err(Error::invalid(
                 "solver.samples_per_cycle must be a power of two ≥ 256",
             ));
+        }
+        if let Some(tf) = &self.measurements.cabin_tf {
+            let g = &tf.gain_db;
+            if g.is_empty()
+                || g.iter().any(|p| !(p[0] > 0.0 && p[1].is_finite()))
+                || g.windows(2).any(|w| w[1][0] <= w[0][0])
+            {
+                return Err(Error::invalid(
+                    "measurements.cabin_tf.gain_db needs finite gains at increasing positive frequencies",
+                ));
+            }
         }
         Ok(())
     }

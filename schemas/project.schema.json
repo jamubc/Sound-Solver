@@ -26,6 +26,9 @@
         "$ref": "#/$defs/Material"
       }
     },
+    "measurements": {
+      "$ref": "#/$defs/Measurements"
+    },
     "name": {
       "type": "string"
     },
@@ -131,6 +134,52 @@
           "description": "Not known; a placeholder the results depend on.",
           "type": "string",
           "const": "unknown"
+        }
+      ]
+    },
+    "CabinTf": {
+      "description": "Cabin transfer function: level at the driver's ear minus level at the exterior receiver.",
+      "type": "object",
+      "properties": {
+        "gain_db": {
+          "description": "`[[frequency_hz, gain_db], …]`, frequency increasing; linear between points, undefined\noutside them.",
+          "type": "array",
+          "items": {
+            "type": "array",
+            "items": {
+              "type": "number",
+              "format": "double"
+            },
+            "maxItems": 2,
+            "minItems": 2
+          }
+        },
+        "method": {
+          "$ref": "#/$defs/CabinTfMethod"
+        },
+        "source": {
+          "description": "Where and when it was measured.",
+          "type": "string"
+        }
+      },
+      "additionalProperties": false,
+      "required": [
+        "method",
+        "source",
+        "gain_db"
+      ]
+    },
+    "CabinTfMethod": {
+      "oneOf": [
+        {
+          "description": "Exterior and interior recordings at the same cruise point; ratio per engine order.",
+          "type": "string",
+          "const": "order_ratio"
+        },
+        {
+          "description": "Impulse response: clap or balloon at the tailpipe, phone at the driver's ear.",
+          "type": "string",
+          "const": "impulse"
         }
       ]
     },
@@ -765,6 +814,24 @@
         "austenitic_stainless",
         "titanium"
       ]
+    },
+    "Measurements": {
+      "description": "Data measured on the vehicle and stored with the project.",
+      "type": "object",
+      "properties": {
+        "cabin_tf": {
+          "description": "Without it the interior drone is unavailable: the cabin is never synthesised.",
+          "anyOf": [
+            {
+              "$ref": "#/$defs/CabinTf"
+            },
+            {
+              "type": "null"
+            }
+          ]
+        }
+      },
+      "additionalProperties": false
     },
     "Operating": {
       "type": "object",

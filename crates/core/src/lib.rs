@@ -8,6 +8,7 @@ pub mod gas;
 pub mod gas1d;
 pub mod geometry;
 pub mod math;
+pub mod metrics;
 pub mod model;
 pub mod preview;
 pub mod project;
