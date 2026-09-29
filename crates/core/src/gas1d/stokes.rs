@@ -14,6 +14,13 @@
 //! rate of change), so a steady state produces none: mean-flow friction and heat transfer stay
 //! with the quasi-steady correlations and are not counted twice.
 //!
+//! `T` here is the acoustic temperature, which moves with the pressure along the isentrope,
+//! `dT = (γ−1)/γ · T dp/p`: that is the fluctuation Kirchhoff's thermal layer carries.
+//! Temperature carried with the flow (hot and cold gas from each exhaust event, slow drifts)
+//! reaches the wall through the quasi-steady correlation instead. Driven by the gas
+//! temperature itself, the Caputo memory held a wall at the initial gas temperature and fed a
+//! slow runaway (the W205 case at 3000 rpm left the physical range within 6 s).
+//!
 //! Diffusive representation (Montseny 1998): `∂^{1/2}u = Σₖ wₖ φₖ`, `dφₖ/dt = −sₖ φₖ + du/dt`,
 //! from `√(jω) = (jω/π) ∫₀^∞ s^{−½}/(jω + s) ds` with `s = eˣ` and the trapezoidal rule in `x`
 //! (step `h` = 1.5, `x` spanning the audio band with twelve e-folds of margin each side):

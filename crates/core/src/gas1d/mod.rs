@@ -443,7 +443,7 @@ pub struct Simulation {
     /// Stokes-layer memory states per duct: for each cell, the velocity states then the
     /// temperature states. Empty for ducts without wall friction and for channel bundles.
     phi: Vec<Vec<f64>>,
-    /// Velocity and temperature of each cell at the start of the step.
+    /// Velocity and pressure of each cell at the start of the step.
     start: Vec<Vec<(f64, f64)>>,
     /// Transverse velocity through each cell's perforate (inner ducts of coupled pairs).
     perforate_u: Vec<Vec<f64>>,
@@ -617,7 +617,7 @@ impl Simulation {
         for (d, start) in self.start.iter_mut().enumerate() {
             if !self.phi[d].is_empty() {
                 for (s, p) in start.iter_mut().zip(&self.prim[d]) {
-                    *s = (p.u, p.t);
+                    *s = (p.u, p.p);
                 }
             }
         }
@@ -792,10 +792,13 @@ impl Simulation {
             }
             for i in 0..duct.n() {
                 let p = to_prim(gas, self.q[d][i]);
-                let (u0, t0) = self.start[d][i];
+                let (u0, p0) = self.start[d][i];
                 let (phi_u, phi_t) = self.phi[d][2 * np * i..2 * np * (i + 1)].split_at_mut(np);
                 let du = self.stokes.advance(phi_u, p.u - u0, &decay, &gain);
-                let dtemp = self.stokes.advance(phi_t, p.t - t0, &decay, &gain);
+                // Acoustic temperature change, isentropic with the pressure.
+                let g = gas.gamma(p.t);
+                let dt_acoustic = (g - 1.0) / g * p.t / p.p * (p.p - p0);
+                let dtemp = self.stokes.advance(phi_t, dt_acoustic, &decay, &gain);
                 let tau = (p.rho * gas.viscosity(p.t)).sqrt() * du;
                 let heat = -(p.rho * gas.cp(p.t) * gas.conductivity(p.t)).sqrt() * dtemp;
                 let per = 4.0 / duct.diameter[i];
