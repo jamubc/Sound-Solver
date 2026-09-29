@@ -29,6 +29,9 @@
       "description": "One operating point as a time-domain sweep streams it.",
       "$ref": "#/$defs/PointOutcome"
     },
+    "progress": {
+      "$ref": "#/$defs/CycleProgress"
+    },
     "sweep": {
       "$ref": "#/$defs/SweepResult"
     },
@@ -44,6 +47,7 @@
     "manifests",
     "sweep",
     "point",
+    "progress",
     "fabrication",
     "clearance",
     "tuning",
@@ -137,6 +141,32 @@
         "wanted_mm",
         "at",
         "scan_point"
+      ]
+    },
+    "CycleProgress": {
+      "description": "A time-domain point in progress: engine cycles run, and how far the last differs from the\none before (the periodicity residual; `None` after the first).",
+      "type": "object",
+      "properties": {
+        "cycle": {
+          "type": "integer",
+          "format": "uint32",
+          "minimum": 0
+        },
+        "residual": {
+          "type": [
+            "number",
+            "null"
+          ],
+          "format": "double"
+        },
+        "rpm": {
+          "type": "number",
+          "format": "double"
+        }
+      },
+      "required": [
+        "rpm",
+        "cycle"
       ]
     },
     "DroneReport": {

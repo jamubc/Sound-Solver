@@ -357,7 +357,7 @@
   }
 
   .via .row:last-child {
-    grid-template-columns: 110px 70px minmax(0, 1fr) auto auto;
+    grid-template-columns: 110px 88px minmax(0, 1fr) auto auto;
   }
 
   .label {

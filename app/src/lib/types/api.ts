@@ -180,6 +180,7 @@ export interface Api {
         rpm: number;
         status: "failed";
       };
+  progress: CycleProgress;
   sweep: SweepResult;
   tracks: OrderTracks;
   tuning: Tuning;
@@ -618,6 +619,18 @@ export interface Line {
   phase_rad: number;
   spl_db: number;
   spl_dba: number;
+}
+/**
+ * A time-domain point in progress: engine cycles run, and how far the last differs from the
+ * one before (the periodicity residual; `None` after the first).
+ *
+ * This interface was referenced by `Api`'s JSON-Schema
+ * via the `definition` "CycleProgress".
+ */
+export interface CycleProgress {
+  cycle: number;
+  residual?: number | null;
+  rpm: number;
 }
 /**
  * This interface was referenced by `Api`'s JSON-Schema

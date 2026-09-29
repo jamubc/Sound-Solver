@@ -31,8 +31,14 @@ export async function mockBackend(page: Page, project: 'project' | 'project-stub
       cancel: () => null,
       solve: (args) => {
         const channel = callbacks.get((args.onPoint as { id: number }).id)!;
-        a.solve.points.forEach((point, index) => channel({ index, message: point }));
+        const cycles = callbacks.get((args.onCycle as { id: number }).id)!;
+        a.solve.points.forEach((point, index) => {
+          const rpm = (point as { rpm: number }).rpm;
+          cycles({ index, message: { rpm, cycle: 1, residual: null } });
+          channel({ index, message: point });
+        });
         channel({ index: a.solve.points.length, end: true });
+        cycles({ index: a.solve.points.length, end: true });
         return a.solve;
       },
       fabrication: () => a.fabrication,

@@ -2,7 +2,7 @@
 // backend re-validates and lays it out, and the four-pole preview reruns. Time-domain results
 // belong to the project they were solved for, so an edit clears them.
 import { backend, type ScanMesh } from './backend';
-import type { Clearance, Layout, Manifest, PointOutcome, PointResult, SweepResult } from './types/api';
+import type { Clearance, CycleProgress, Layout, Manifest, PointOutcome, PointResult, SweepResult } from './types/api';
 import type { Project } from './types/project';
 
 export type Selection =
@@ -18,9 +18,21 @@ interface TimeDomain {
   result: SweepResult | null;
   error: string | null;
   total: number;
+  /** The points still running, by engine speed: cycles run and periodicity residual. */
+  inFlight: Record<number, CycleProgress>;
+  /** When the sweep started, ms since the epoch. */
+  startedAt: number;
 }
 
-const idle = (): TimeDomain => ({ running: false, points: [], result: null, error: null, total: 0 });
+const idle = (): TimeDomain => ({
+  running: false,
+  points: [],
+  result: null,
+  error: null,
+  total: 0,
+  inFlight: {},
+  startedAt: 0,
+});
 
 /** Colours of the three scan reference points, in the panel and the viewport. */
 export const REFERENCE_COLOURS = ['#4fd1c5', '#ff79c6', '#c792ea'];
@@ -57,7 +69,42 @@ export const app = $state({
   baseline: null as Baseline | null,
   /** Show lengths in inches rather than millimetres. */
   inches: false,
+  /** Edits that `undo` and `redo` can step through. */
+  history: { undo: 0, redo: 0 },
 });
+
+// Undo and redo: the project before each edit, and after each undone one.
+const past: Project[] = [];
+const future: Project[] = [];
+const HISTORY = 200;
+
+function remember() {
+  past.push($state.snapshot(app.project) as Project);
+  if (past.length > HISTORY) past.shift();
+  future.length = 0;
+  app.history = { undo: past.length, redo: 0 };
+}
+
+function restore(from: Project[], to: Project[]) {
+  const project = from.pop();
+  if (!project || !app.project) return;
+  to.push($state.snapshot(app.project) as Project);
+  app.project = project;
+  const s = app.selection;
+  const routes = project.system.routes;
+  const kept =
+    s?.kind === 'element'
+      ? project.system.elements.some((e) => e.id === s.id)
+      : s?.kind === 'route'
+        ? routes.some((r) => r.id === s.id)
+        : s?.kind === 'vertex' && (routes.find((r) => r.id === s.route)?.via_mm?.length ?? 0) > s.index;
+  if (!kept) app.selection = null;
+  invalidate();
+  app.history = { undo: past.length, redo: future.length };
+}
+
+export const undo = () => restore(past, future);
+export const redo = () => restore(future, past);
 
 let timer: ReturnType<typeof setTimeout> | undefined;
 let refreshRun = 0;
@@ -157,13 +204,20 @@ export function load(project: Project, path: string | null) {
   app.clearance = null;
   app.clearanceError = null;
   app.picking = null;
+  past.length = future.length = 0;
+  app.history = { undo: 0, redo: 0 };
   refresh(0);
 }
 
 /** Applies an edit; the previous time-domain results no longer describe the project. */
 export function edit(change: (project: Project) => void) {
   if (!app.project) return;
+  remember();
   change(app.project);
+  invalidate();
+}
+
+function invalidate() {
   app.dirty = true;
   if (app.timeDomain.running) void backend.cancel();
   solveRun++;
@@ -174,6 +228,7 @@ export function edit(change: (project: Project) => void) {
 /** Applies an edit to fabrication data (stock, scan, hangers, joints), which no result depends on. */
 export function editFabrication(change: (project: Project) => void) {
   if (!app.project) return;
+  remember();
   change(app.project);
   app.dirty = true;
   refresh();
@@ -210,11 +265,27 @@ export async function solveTimeDomain() {
   const project = $state.snapshot(app.project) as Project;
   const run = ++solveRun;
   const [start, stop, step] = project.operating.sweep_rpm;
-  app.timeDomain = { ...idle(), running: true, total: Math.floor((stop - start) / step + 1e-9) + 1 };
+  app.timeDomain = {
+    ...idle(),
+    running: true,
+    total: Math.floor((stop - start) / step + 1e-9) + 1,
+    startedAt: Date.now(),
+  };
+  // Cycles and points come on separate channels: a late cycle of a finished point is dropped.
+  const finished = new Set<number>();
   try {
-    const result = await backend.solve(project, (point) => {
-      if (run === solveRun) app.timeDomain.points.push(point);
-    });
+    const result = await backend.solve(
+      project,
+      (point) => {
+        if (run !== solveRun) return;
+        finished.add(point.rpm);
+        delete app.timeDomain.inFlight[point.rpm];
+        app.timeDomain.points.push(point);
+      },
+      (progress) => {
+        if (run === solveRun && !finished.has(progress.rpm)) app.timeDomain.inFlight[progress.rpm] = progress;
+      },
+    );
     if (run === solveRun) app.timeDomain.result = result;
   } catch (e) {
     if (run === solveRun) app.timeDomain.error = String(e);

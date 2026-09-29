@@ -3,10 +3,13 @@
   import * as THREE from 'three';
   import { OrbitControls } from 'three/examples/jsm/controls/OrbitControls.js';
   import { TransformControls } from 'three/examples/jsm/controls/TransformControls.js';
+  import { ViewHelper } from 'three/examples/jsm/helpers/ViewHelper.js';
   import { Line2 } from 'three/examples/jsm/lines/Line2.js';
   import { LineGeometry } from 'three/examples/jsm/lines/LineGeometry.js';
   import { LineMaterial } from 'three/examples/jsm/lines/LineMaterial.js';
+  import { CSS2DObject, CSS2DRenderer } from 'three/examples/jsm/renderers/CSS2DRenderer.js';
   import { MeshBVH, acceleratedRaycast } from 'three-mesh-bvh';
+  import { lengthUnit, mm, shown } from './format';
   import { app, edit, editFabrication, REFERENCE_COLOURS, type Selection } from './state.svelte';
   import type { Layout, PieceLayout } from './types/api';
 
@@ -16,9 +19,21 @@
   // Colours by pipe material family; the selected route in the accent colour.
   const MATERIAL_COLOUR: Record<string, number> = { '409': 0x8d949e, '304': 0xb9c2cc, '321': 0xb9c2cc, 'ti-gr5': 0x9d95c9 };
   const ACCENT = 0x6aa9ff;
+  const HOVER = 0x1c2c44;
+  /** Standard views: where the camera looks from, in vehicle axes (X forward, Y left, Z up). */
+  const VIEWS: [string, Vec3, string][] = [
+    ['Iso', [0.25, -0.85, 0.45], 'From the right, front and above'],
+    ['Top', [0, -0.001, 1], 'From above'],
+    ['Under', [0, -0.001, -1], 'From below: the underbody side'],
+    ['Side', [0, -1, 0], 'From the right side'],
+    ['Front', [1, 0, 0], 'From the front'],
+    ['Rear', [-1, 0, 0], 'From behind'],
+  ];
 
   let host: HTMLDivElement;
   let renderer: THREE.WebGLRenderer;
+  let labels: CSS2DRenderer;
+  let triad: ViewHelper;
   let scene: THREE.Scene;
   let camera: THREE.PerspectiveCamera;
   let orbit: OrbitControls;
@@ -28,6 +43,8 @@
   let lineMaterials: LineMaterial[] = [];
   let framed = false;
   let scanObject = $state.raw<THREE.Mesh | null>(null);
+  /** Materials lit by the pointer hovering over their route or element. */
+  let hovered: THREE.MeshStandardMaterial[] = [];
 
   const v3 = (p: readonly number[]) => new THREE.Vector3(p[0], p[1], p[2]);
   const key = (route: string, index: number) => `${route}#${index}`;
@@ -85,10 +102,24 @@
   function clear() {
     gizmo?.detach();
     dispose(content);
+    content.traverse((o) => {
+      if (o instanceof CSS2DObject) o.element.remove();
+    });
     scene.remove(content);
     content = new THREE.Group();
     handles = new Map();
     lineMaterials = [];
+    hovered = [];
+  }
+
+  /** A text label pinned to a point of the scene. */
+  function label(text: string, at: THREE.Vector3, kind: 'dim' | 'tag') {
+    const element = document.createElement('div');
+    element.className = kind;
+    element.textContent = text;
+    const object = new CSS2DObject(element);
+    object.position.copy(at);
+    content.add(object);
   }
 
   function build(layout: Layout, selection: Selection | null) {
@@ -109,6 +140,15 @@
         mesh.userData.pick = pick;
         mesh.userData.piece = piece;
         content.add(mesh);
+        // Dimensions of the selected pipe: every straight's length, every bend's angle and radius.
+        if (r.id !== selectedRoute) continue;
+        const middle = pts[Math.floor(pts.length / 2)].clone();
+        if (piece.kind === 'straight') {
+          const length = pts[0].distanceTo(pts[1]);
+          if (length >= 20) label(mm(length, 0), pts[0].clone().lerp(pts[1], 0.5), 'dim');
+        } else {
+          label(`${piece.angle_deg.toFixed(0)}° R${shown(piece.radius_mm)} ${lengthUnit()}`, middle, 'dim');
+        }
       }
       // The flow solver's x-axis, drawn over the pipe.
       const geometry = new LineGeometry();
@@ -153,6 +193,8 @@
         mesh.userData.pick = pick;
         content.add(mesh);
       }
+      const body = e.body[Math.floor(e.body.length / 2)];
+      label(e.id, body ? v3(body.from).lerp(v3(body.to), 0.5) : v3(e.ports[0]?.position ?? [0, 0, 0]), 'tag');
       for (const p of e.ports) {
         const port = new THREE.Mesh(new THREE.SphereGeometry(7, 12, 8), new THREE.MeshBasicMaterial({ color: 0x5fd08a }));
         port.position.copy(v3(p.position));
@@ -169,31 +211,89 @@
     if (!framed) frame();
   }
 
-  /** Fits the whole system (and the scan) in view, seen from the car's right side, slightly from above. */
-  function frame() {
+  /** Everything drawn: the system and the scan. */
+  function everything() {
     const box = new THREE.Box3().setFromObject(content);
     if (scanObject) box.union(new THREE.Box3().setFromObject(scanObject));
+    return box;
+  }
+
+  /** Fits `box` in view, looking from `from` (default: the current direction). */
+  function fit(box: THREE.Box3, from?: readonly number[]) {
     if (box.isEmpty()) return;
+    const direction = from ? v3(from).normalize() : camera.position.clone().sub(orbit.target).normalize();
     const sphere = box.getBoundingSphere(new THREE.Sphere());
     const fov = (camera.fov * Math.PI) / 180;
     const narrowest = Math.min(fov, 2 * Math.atan(Math.tan(fov / 2) * camera.aspect));
-    const distance = (1.05 * sphere.radius) / Math.sin(narrowest / 2);
+    const distance = (1.05 * Math.max(sphere.radius, 50)) / Math.sin(narrowest / 2);
     orbit.target.copy(sphere.center);
-    camera.position.copy(sphere.center).addScaledVector(new THREE.Vector3(0.25, -0.85, 0.45).normalize(), distance);
+    camera.position.copy(sphere.center).addScaledVector(direction, distance);
     camera.near = distance / 200;
     camera.far = distance * 50;
     camera.updateProjectionMatrix();
     orbit.update();
+  }
+
+  /** Fits the whole system (and the scan) in view, seen from the car's right side, slightly from above. */
+  function frame() {
+    fit(everything(), VIEWS[0][1]);
     framed = true;
+  }
+
+  const fitAll = () => fit(everything());
+
+  /** Fits the selected route, bend point or element in view. */
+  function fitSelection() {
+    const s = app.selection;
+    if (!s) return;
+    const box = new THREE.Box3();
+    content.traverse((o) => {
+      const pick = o.userData.pick as Pick | undefined;
+      const hit =
+        pick &&
+        (s.kind === 'element'
+          ? pick.kind === 'element' && pick.id === s.id
+          : s.kind === 'route'
+            ? pick.kind === 'route' && pick.id === s.id
+            : pick.kind === 'vertex' && pick.route === s.route && pick.index === s.index);
+      if (hit) box.expandByObject(o);
+    });
+    fit(box);
+  }
+
+  function hover(pick: Pick | undefined) {
+    hovered.forEach((m) => m.emissive.setHex(0x000000));
+    hovered = [];
+    if (!pick || pick.kind === 'vertex') return;
+    content.traverse((o) => {
+      const p = o.userData.pick as Pick | undefined;
+      const same = p && p.kind !== 'vertex' && p.kind === pick.kind && p.id === pick.id;
+      if (same && o instanceof THREE.Mesh && o.material instanceof THREE.MeshStandardMaterial) {
+        o.material.emissive.setHex(HOVER);
+        hovered.push(o.material);
+      }
+    });
   }
 
   function resize() {
     if (!host || !renderer) return;
     const { clientWidth: w, clientHeight: h } = host;
     renderer.setSize(w, h, false);
+    labels.setSize(w, h);
     camera.aspect = w / Math.max(h, 1);
     camera.updateProjectionMatrix();
     lineMaterials.forEach((m) => m.resolution.set(w, h));
+  }
+
+  // F fits everything; Esc drops the selection and any scan pick in progress.
+  function keys(e: KeyboardEvent) {
+    if (e.metaKey || e.ctrlKey || e.altKey) return;
+    if (e.target instanceof HTMLElement && e.target.closest('input, select, textarea')) return;
+    if (e.key === 'f' || e.key === 'F') fitAll();
+    else if (e.key === 'Escape') {
+      app.selection = null;
+      app.picking = null;
+    }
   }
 
   /** A via point dragged to a new place becomes an edit of its route. */
@@ -212,7 +312,11 @@
   onMount(() => {
     renderer = new THREE.WebGLRenderer({ antialias: true });
     renderer.setPixelRatio(window.devicePixelRatio);
+    renderer.autoClear = false;
     host.appendChild(renderer.domElement);
+    labels = new CSS2DRenderer();
+    labels.domElement.className = 'labels';
+    host.appendChild(labels.domElement);
     scene = new THREE.Scene();
     scene.background = new THREE.Color(0x11151d);
     camera = new THREE.PerspectiveCamera(35, 1, 5, 200000);
@@ -220,6 +324,10 @@
     camera.position.set(2500, 3000, 1800);
     orbit = new OrbitControls(camera, renderer.domElement);
     orbit.enableDamping = true;
+    orbit.zoomToCursor = true;
+    // The corner triad shows which way the vehicle axes point.
+    triad = new ViewHelper(camera, renderer.domElement);
+    triad.setLabels('X', 'Y', 'Z');
     scene.add(new THREE.HemisphereLight(0xdde6ff, 0x1a1f28, 1.4));
     const sun = new THREE.DirectionalLight(0xffffff, 1.8);
     sun.position.set(1500, 2000, 4000);
@@ -261,17 +369,41 @@
       const piece = hit?.object.userData.piece as PieceLayout | undefined;
       app.selection = pick?.kind === 'route' && piece ? { ...pick, s_mm: along(piece, hit!.point) } : (pick ?? null);
     });
+    // Hover: light what a click would select, at most once a frame.
+    let pointer: THREE.Vector2 | null = null;
+    renderer.domElement.addEventListener('pointermove', (e) => {
+      const rect = renderer.domElement.getBoundingClientRect();
+      pointer = new THREE.Vector2(((e.clientX - rect.left) / rect.width) * 2 - 1, -((e.clientY - rect.top) / rect.height) * 2 + 1);
+    });
+    renderer.domElement.addEventListener('pointerleave', () => {
+      pointer = null;
+      hover(undefined);
+    });
 
     const observer = new ResizeObserver(resize);
     observer.observe(host);
     renderer.setAnimationLoop(() => {
       orbit.update();
+      if (pointer && !gizmo.dragging && app.picking === null) {
+        raycaster.setFromCamera(pointer, camera);
+        const pick = raycaster.intersectObjects(content.children, false).find((h) => h.object.userData.pick)?.object
+          .userData.pick as Pick | undefined;
+        hover(pick);
+        renderer.domElement.style.cursor = pick ? 'pointer' : '';
+        pointer = null;
+      }
+      renderer.clear();
       renderer.render(scene, camera);
+      triad.render(renderer);
+      labels.render(scene, camera);
     });
+    window.addEventListener('keydown', keys);
     return () => {
+      window.removeEventListener('keydown', keys);
       observer.disconnect();
       renderer.setAnimationLoop(null);
       clear();
+      triad.dispose();
       gizmo.dispose();
       orbit.dispose();
       renderer.dispose();
@@ -392,12 +524,21 @@
 
 <div class="viewport" bind:this={host} data-testid="viewport">
   <div class="legend muted">
-    X forward · Y left · Z up · mm · origin at the downpipe flange<br />
+    X forward · Y left · Z up · origin at the downpipe flange<br />
     {#if app.picking !== null}
-      Click the scan to place reference point {app.picking + 1}
+      Click the scan to place reference point {app.picking + 1} · Esc to stop
     {:else}
-      Click to select · drag a via point's arrows to move it
+      Click to select · drag a bend point's arrows to move it · drag to orbit, right-drag to pan, scroll to zoom
+      at the cursor · F fits · Esc clears
     {/if}
+  </div>
+  <div class="views" role="toolbar" aria-label="View">
+    <button onclick={fitAll} title="Fit everything in view (F)">Fit</button>
+    <button onclick={fitSelection} disabled={!app.selection} title="Fit the selection in view">Selection</button>
+    <span class="sep"></span>
+    {#each VIEWS as [name, from, title] (name)}
+      <button onclick={() => fit(everything(), from)} {title}>{name}</button>
+    {/each}
   </div>
 </div>
 
@@ -416,8 +557,64 @@
   .legend {
     position: absolute;
     left: 10px;
-    top: 8px;
+    bottom: 8px;
+    max-width: calc(100% - 160px);
     font-size: 11px;
     pointer-events: none;
+  }
+
+  .views {
+    position: absolute;
+    right: 8px;
+    top: 8px;
+    display: flex;
+    gap: 2px;
+    padding: 3px;
+    border: 1px solid var(--line);
+    border-radius: 6px;
+    background: rgba(24, 29, 39, 0.85);
+  }
+
+  .views button {
+    padding: 2px 7px;
+    font-size: 11.5px;
+    border-color: transparent;
+    background: none;
+  }
+
+  .views button:hover:not(:disabled) {
+    border-color: var(--accent);
+  }
+
+  .sep {
+    width: 1px;
+    margin: 2px 3px;
+    background: var(--line);
+  }
+
+  .viewport :global(.labels) {
+    position: absolute;
+    inset: 0;
+    pointer-events: none;
+  }
+
+  .viewport :global(.dim),
+  .viewport :global(.tag) {
+    font: 11px/1.2 ui-monospace, 'SF Mono', Menlo, monospace;
+    padding: 1px 5px;
+    border-radius: 3px;
+    white-space: nowrap;
+  }
+
+  .viewport :global(.dim) {
+    color: #ffd479;
+    background: rgba(17, 21, 29, 0.88);
+    border: 1px solid #5a4a22;
+  }
+
+  .viewport :global(.tag) {
+    color: var(--text);
+    background: rgba(31, 37, 49, 0.8);
+    border: 1px solid var(--line);
   }
 </style>

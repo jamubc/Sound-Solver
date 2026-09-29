@@ -9,7 +9,7 @@ use exhaust_core::measure::OrderTracks;
 use exhaust_core::metrics::OrderDifference;
 use exhaust_core::project::Project;
 use exhaust_core::scan::Clearance;
-use exhaust_core::solve::{PointOutcome, SweepResult};
+use exhaust_core::solve::{CycleProgress, PointOutcome, SweepResult};
 use exhaust_core::tune::Tuning;
 use schemars::{JsonSchema, Schema};
 
@@ -22,6 +22,7 @@ struct Api {
     sweep: SweepResult,
     /// One operating point as a time-domain sweep streams it.
     point: PointOutcome,
+    progress: CycleProgress,
     fabrication: Package,
     clearance: Clearance,
     tuning: Tuning,

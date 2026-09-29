@@ -68,6 +68,13 @@ input:invalid {
   border-color: var(--bad);
 }
 
+/* Spinner arrows take the width narrow coordinate fields need for their digits. */
+input[type='number']::-webkit-inner-spin-button,
+input[type='number']::-webkit-outer-spin-button {
+  -webkit-appearance: none;
+  margin: 0;
+}
+
 h2 {
   font-size: 12px;
   font-weight: 600;

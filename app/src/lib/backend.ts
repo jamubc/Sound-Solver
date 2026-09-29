@@ -3,6 +3,7 @@
 import { Channel, invoke } from '@tauri-apps/api/core';
 import type {
   Clearance,
+  CycleProgress,
   Layout,
   Manifest,
   Metrics,
@@ -35,10 +36,13 @@ export const backend = {
   /** Takes a two-port element out, joining its pipes. */
   removeElement: (project: Project, id: string) => invoke<Project>('remove_element', { project, id }),
   preview: (project: Project) => invoke<SweepResult>('preview', { project }),
-  solve(project: Project, onPoint: (point: PointOutcome) => void) {
-    const channel = new Channel<PointOutcome>();
-    channel.onmessage = onPoint;
-    return invoke<SweepResult>('solve', { project, onPoint: channel });
+  /** Time-domain sweep: every engine cycle of the points in flight, then each point, as they come. */
+  solve(project: Project, onPoint: (point: PointOutcome) => void, onCycle: (progress: CycleProgress) => void) {
+    const points = new Channel<PointOutcome>();
+    points.onmessage = onPoint;
+    const cycles = new Channel<CycleProgress>();
+    cycles.onmessage = onCycle;
+    return invoke<SweepResult>('solve', { project, onPoint: points, onCycle: cycles });
   },
   cancel: () => invoke<void>('cancel'),
   /** Straights, bends, stock sticks and joints of the project as drawn. */

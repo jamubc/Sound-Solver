@@ -39,6 +39,10 @@ test('element properties come from its manifest', async ({ page }) => {
   await diameter.press('Tab');
   await page.getByTestId('units').click();
   await expect(properties.locator('input[max="600"]')).toHaveValue('203.2');
+  await page.getByTestId('undo').click();
+  await expect(properties.locator('input[max="600"]')).toHaveValue('200');
+  await page.getByTestId('redo').click();
+  await expect(properties.locator('input[max="600"]')).toHaveValue('203.2');
 });
 
 test('a time-domain sweep streams in and is labelled as the reference', async ({ page }) => {
@@ -47,6 +51,7 @@ test('a time-domain sweep streams in and is labelled as the reference', async ({
   await expect(firing).toContainText('time domain');
   await expect(firing).toContainText('3/3 converged');
   await expect(page.getByTestId('drone')).toContainText('time domain');
+  await expect(page.getByTestId('status')).toContainText('3 speeds, 3 converged');
   await page.screenshot({ path: 'test-results/time-domain.png' });
 });
 

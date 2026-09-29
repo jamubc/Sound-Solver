@@ -6,6 +6,7 @@
   import Plots from './lib/Plots.svelte';
   import Properties from './lib/Properties.svelte';
   import { app, load } from './lib/state.svelte';
+  import StatusBar from './lib/StatusBar.svelte';
   import Toolbar from './lib/Toolbar.svelte';
   import Tree from './lib/Tree.svelte';
   import Viewport from './lib/Viewport.svelte';
@@ -57,17 +58,19 @@
       <Fabrication />
     {/if}
   </section>
+  <StatusBar />
 </div>
 
 <style>
   .shell {
     display: grid;
-    grid-template-columns: 300px minmax(0, 1fr) 560px;
-    grid-template-rows: auto auto minmax(0, 1fr);
+    grid-template-columns: 340px minmax(0, 1fr) 560px;
+    grid-template-rows: auto auto minmax(0, 1fr) auto;
     grid-template-areas:
       'top top top'
       'banner banner banner'
-      'side view plots';
+      'side view plots'
+      'status status status';
     height: 100%;
   }
 

@@ -295,7 +295,26 @@ pub fn evo_state(project: &Project, gas: &Gas, rpm: f64) -> (EvoState, EvoSource
     (evo, EvoSource::Estimated { map_kpa })
 }
 
+/// A time-domain point in progress: engine cycles run, and how far the last differs from the
+/// one before (the periodicity residual; `None` after the first).
+#[derive(Clone, Copy, Debug, PartialEq, Serialize, JsonSchema)]
+pub struct CycleProgress {
+    pub rpm: f64,
+    pub cycle: u32,
+    pub residual: Option<f64>,
+}
+
 pub fn solve_point(project: &Project, rpm: f64) -> Result<PointResult> {
+    solve_point_with(project, rpm, &mut |_| true)
+}
+
+/// `solve_point`, reporting every engine cycle to `on_cycle`, which stops the run by
+/// returning `false`.
+pub fn solve_point_with(
+    project: &Project,
+    rpm: f64,
+    on_cycle: &mut dyn FnMut(CycleProgress) -> bool,
+) -> Result<PointResult> {
     if rpm.is_nan() || rpm <= 0.0 {
         return Err(Error::invalid("engine speed must be positive"));
     }
@@ -379,6 +398,14 @@ pub fn solve_point(project: &Project, rpm: f64) -> Result<PointResult> {
         } else {
             (r2, 2)
         };
+        let progress = CycleProgress {
+            rpm,
+            cycle: cycles,
+            residual: residual.is_finite().then_some(residual),
+        };
+        if !on_cycle(progress) {
+            return Err(Error::solver("stopped"));
+        }
         if (cycles >= settings.min_cycles && residual <= tol) || cycles >= settings.max_cycles {
             break;
         }

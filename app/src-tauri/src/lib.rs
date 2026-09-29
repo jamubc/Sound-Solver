@@ -16,7 +16,7 @@ use exhaust_core::measure::{self, OrderTracks, Recording, RpmLog};
 use exhaust_core::metrics::{Metrics, OrderDifference};
 use exhaust_core::project::{CabinTf, CabinTfMethod, Project};
 use exhaust_core::scan::{self, Clearance, Mesh};
-use exhaust_core::solve::{self, PointOutcome, SolverKind, SweepResult};
+use exhaust_core::solve::{self, CycleProgress, PointOutcome, SolverKind, SweepResult};
 use exhaust_core::tune::{self, Tuning};
 use exhaust_core::{edit, metrics};
 use rayon::prelude::*;
@@ -328,13 +328,16 @@ async fn preview(project: Value) -> Result<SweepResult, String> {
     .map_err(|e| e.to_string())
 }
 
-/// Time-domain sweep over the project's sweep, streaming each point through `on_point`;
-/// returns the sweep with its metrics, or an error if a newer sweep superseded it.
+/// Time-domain sweep over the project's sweep, streaming every engine cycle of the points in
+/// flight through `on_cycle` and each point through `on_point`; returns the sweep with its
+/// metrics, or an error if a newer sweep (or `cancel`) superseded it, which also stops the
+/// points in flight.
 #[tauri::command]
 async fn solve(
     app: AppHandle,
     project: Value,
     on_point: Channel<PointOutcome>,
+    on_cycle: Channel<CycleProgress>,
 ) -> Result<SweepResult, String> {
     let project = parse(&project)?;
     let generation = GENERATION.fetch_add(1, Ordering::SeqCst) + 1;
@@ -347,29 +350,41 @@ async fn solve(
     tauri::async_runtime::spawn_blocking(move || {
         let hash = project.hash();
         let rpms = project.operating.sweep();
+        let current = || GENERATION.load(Ordering::SeqCst) == generation;
         let points: Vec<Option<PointOutcome>> = rpms
             .par_iter()
             .map(|&rpm| {
-                if GENERATION.load(Ordering::SeqCst) != generation {
+                if !current() {
                     return None;
                 }
                 let file = cache.join(format!("{hash}-{rpm}.json"));
                 let cached = std::fs::read_to_string(&file)
                     .ok()
                     .and_then(|text| serde_json::from_str(&text).ok());
-                let outcome = cached.unwrap_or_else(|| {
-                    let outcome = match solve::solve_point(&project, rpm) {
-                        Ok(r) => PointOutcome::Solved(Box::new(r)),
-                        Err(e) => PointOutcome::Failed {
-                            rpm,
-                            error: e.to_string(),
-                        },
-                    };
-                    if let Ok(json) = serde_json::to_string(&outcome) {
-                        let _ = std::fs::write(&file, json);
+                let outcome = match cached {
+                    Some(outcome) => outcome,
+                    None => {
+                        let run = solve::solve_point_with(&project, rpm, &mut |progress| {
+                            let _ = on_cycle.send(progress);
+                            current()
+                        });
+                        // Stopped by a newer sweep: neither cached nor reported.
+                        if run.is_err() && !current() {
+                            return None;
+                        }
+                        let outcome = match run {
+                            Ok(r) => PointOutcome::Solved(Box::new(r)),
+                            Err(e) => PointOutcome::Failed {
+                                rpm,
+                                error: e.to_string(),
+                            },
+                        };
+                        if let Ok(json) = serde_json::to_string(&outcome) {
+                            let _ = std::fs::write(&file, json);
+                        }
+                        outcome
                     }
-                    outcome
-                });
+                };
                 let _ = on_point.send(outcome.clone());
                 Some(outcome)
             })

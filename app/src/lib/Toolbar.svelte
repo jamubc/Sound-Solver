@@ -1,7 +1,7 @@
 <script lang="ts">
   import { open, save } from '@tauri-apps/plugin-dialog';
   import { backend } from './backend';
-  import { app, cancelTimeDomain, load, solveTimeDomain } from './state.svelte';
+  import { app, cancelTimeDomain, load, redo, solveTimeDomain, undo } from './state.svelte';
   import type { Project } from './types/project';
 
   const filters = [{ name: 'Exhaust project', extensions: ['json'] }];
@@ -34,16 +34,23 @@
 
   const reference = () => attempt(async () => load(await backend.stockProject(), null));
 
-  const previewStatus = $derived(
-    app.invalid
-      ? 'preview unavailable'
-      : app.previewError
-        ? `preview failed: ${app.previewError}`
-        : app.previewMs !== null
-          ? `preview ${Math.round(app.previewMs)} ms`
-          : 'previewing…',
-  );
+  // ⌘O open, ⌘S save, ⇧⌘S save as, ⌘Z undo, ⇧⌘Z redo; typing in a field keeps its own undo.
+  function shortcut(e: KeyboardEvent) {
+    if (!(e.metaKey || e.ctrlKey)) return;
+    const key = e.key.toLowerCase();
+    const typing = e.target instanceof HTMLElement && e.target.closest('input, select, textarea');
+    const run = (action: () => void) => {
+      e.preventDefault();
+      action();
+    };
+    if (key === 'o') run(openFile);
+    else if (key === 's') run(() => saveAs(e.shiftKey ? null : app.path));
+    else if (key === 'z' && !typing) run(e.shiftKey ? redo : undo);
+    else if (key === 'y' && !typing) run(redo);
+  }
 </script>
+
+<svelte:window onkeydown={shortcut} />
 
 <header>
   <div class="title">
@@ -52,18 +59,23 @@
     <span class="muted path">{app.path ?? 'not saved'}</span>
   </div>
   <div class="actions">
-    <button onclick={reference}>Reference W205</button>
-    <button onclick={openFile}>Open…</button>
-    <button onclick={() => saveAs(app.path)} disabled={!app.project}>Save</button>
-    <button onclick={() => saveAs(null)} disabled={!app.project}>Save as…</button>
-    <button data-testid="units" title="Show lengths in millimetres or inches" onclick={() => (app.inches = !app.inches)}>
-      {app.inches ? 'inches' : 'mm'}
-    </button>
+    <div class="group" aria-label="File">
+      <button onclick={reference} title="Open the reference W205 project">Reference W205</button>
+      <button onclick={openFile} title="Open a project (⌘O)">Open…</button>
+      <button onclick={() => saveAs(app.path)} disabled={!app.project} title="Save (⌘S)">Save</button>
+      <button onclick={() => saveAs(null)} disabled={!app.project} title="Save as (⇧⌘S)">Save as…</button>
+    </div>
+    <div class="group" aria-label="Edit">
+      <button onclick={undo} disabled={!app.history.undo} title="Undo (⌘Z)" data-testid="undo">Undo</button>
+      <button onclick={redo} disabled={!app.history.redo} title="Redo (⇧⌘Z)" data-testid="redo">Redo</button>
+    </div>
+    <div class="group">
+      <button data-testid="units" title="Show lengths in millimetres or inches" onclick={() => (app.inches = !app.inches)}>
+        {app.inches ? 'inches' : 'mm'}
+      </button>
+    </div>
     {#if app.timeDomain.running}
-      <span class="mono" data-testid="td-progress">
-        time domain {app.timeDomain.points.length}/{app.timeDomain.total}
-      </span>
-      <button onclick={cancelTimeDomain}>Cancel</button>
+      <button onclick={cancelTimeDomain} title="Stop the sweep, points in flight included">Cancel sweep</button>
     {:else}
       <button
         class="primary"
@@ -72,7 +84,6 @@
         title="Nonlinear time-domain sweep: the reference result">Solve time domain</button
       >
     {/if}
-    <span class="muted mono status">{previewStatus}</span>
   </div>
   {#if failure}<div class="failure">{failure}</div>{/if}
 </header>
@@ -106,11 +117,14 @@
   .actions {
     display: flex;
     align-items: center;
-    gap: 8px;
+    gap: 12px;
   }
 
-  .status {
-    min-width: 130px;
+  .group {
+    display: flex;
+    gap: 4px;
+    padding-right: 12px;
+    border-right: 1px solid var(--line);
   }
 
   .failure {
