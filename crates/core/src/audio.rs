@@ -117,8 +117,24 @@ pub fn synthesize(
     })
 }
 
-/// Complex amplitude of every order at `rpm`: linear between the solved speeds on either side
-/// (an order missing at one of them counts as silent there), the end speeds beyond the range.
+/// Between two solved speeds: level and phase each linear (the phase along the shorter arc),
+/// so an order whose phase turns between them keeps its level. A silent side takes the other's
+/// phase.
+fn blend(va: Complex64, vb: Complex64, x: f64) -> Complex64 {
+    let (ra, pa) = va.to_polar();
+    let (rb, pb) = vb.to_polar();
+    let (pa, pb) = match (ra == 0.0, rb == 0.0) {
+        (true, _) => (pb, pb),
+        (_, true) => (pa, pa),
+        _ => (pa, pb),
+    };
+    let turn = (pb - pa + PI).rem_euclid(2.0 * PI) - PI;
+    Complex64::from_polar(ra + (rb - ra) * x, pa + turn * x)
+}
+
+/// Complex amplitude of every order at `rpm`: `blend` between the solved speeds on either
+/// side (an order missing at one of them counts as silent there), the end speeds beyond the
+/// range.
 fn interpolate(solved: &[(f64, Vec<(f64, Complex64)>)], rpm: f64) -> Vec<(f64, Complex64)> {
     let k = solved.partition_point(|p| p.0 < rpm);
     if k == 0 {
@@ -136,7 +152,7 @@ fn interpolate(solved: &[(f64, Vec<(f64, Complex64)>)], rpm: f64) -> Vec<(f64, C
     };
     let mut out: Vec<(f64, Complex64)> = a
         .iter()
-        .map(|&(o, va)| (o, va * (1.0 - x) + at(b, o) * x))
+        .map(|&(o, va)| (o, blend(va, at(b, o), x)))
         .collect();
     out.extend(
         b.iter()
@@ -205,6 +221,23 @@ mod tests {
             (crossings - expected).abs() <= 1.0,
             "{crossings} vs {expected}"
         );
+        assert!((rms(window) - 1.0).abs() < 0.02, "{}", rms(window));
+    }
+
+    /// An order whose phase turns 2.5 rad between two solved speeds keeps its level between
+    /// them (a straight line between the two complex amplitudes dips to cos 1.25, −10 dB).
+    #[test]
+    fn run_up_keeps_level_while_phase_turns() {
+        let points: Vec<(f64, Vec<Line>)> = [(1000.0, 0.0), (3000.0, 2.5)]
+            .iter()
+            .map(|&(rpm, phase_rad)| {
+                let l = line(2.0, rpm, 94.0);
+                (rpm, vec![Line { phase_rad, ..l }])
+            })
+            .collect();
+        let sound = synthesize(&points, 1000.0, 3000.0, 4.0, &|_| Some(0.0)).unwrap();
+        let fs = sound.sample_rate;
+        let window = &sound.samples[(1.75 * fs) as usize..(2.25 * fs) as usize];
         assert!((rms(window) - 1.0).abs() < 0.02, "{}", rms(window));
     }
 }
