@@ -147,7 +147,7 @@
     "cfl": 0.8,
     "limiter": "van_leer_tvb",
     "min_cycles": 8,
-    "max_cycles": 16,
+    "max_cycles": 32,
     "periodicity_tolerance": 0.01,
     "samples_per_cycle": 2048,
     "max_frequency_hz": 2000.0,
