@@ -1,12 +1,13 @@
 <script lang="ts">
-  import { onMount } from 'svelte';
+  import { onMount, untrack } from 'svelte';
   import * as THREE from 'three';
   import { OrbitControls } from 'three/examples/jsm/controls/OrbitControls.js';
   import { TransformControls } from 'three/examples/jsm/controls/TransformControls.js';
   import { Line2 } from 'three/examples/jsm/lines/Line2.js';
   import { LineGeometry } from 'three/examples/jsm/lines/LineGeometry.js';
   import { LineMaterial } from 'three/examples/jsm/lines/LineMaterial.js';
-  import { app, edit, type Selection } from './state.svelte';
+  import { MeshBVH, acceleratedRaycast } from 'three-mesh-bvh';
+  import { app, edit, editFabrication, REFERENCE_COLOURS, type Selection } from './state.svelte';
   import type { Layout, PieceLayout } from './types/api';
 
   type Vec3 = [number, number, number];
@@ -26,6 +27,7 @@
   let handles = new Map<string, THREE.Mesh>();
   let lineMaterials: LineMaterial[] = [];
   let framed = false;
+  let scanObject = $state.raw<THREE.Mesh | null>(null);
 
   const v3 = (p: readonly number[]) => new THREE.Vector3(p[0], p[1], p[2]);
   const key = (route: string, index: number) => `${route}#${index}`;
@@ -71,14 +73,18 @@
     });
   }
 
-  function clear() {
-    gizmo?.detach();
-    content.traverse((o) => {
-      if (o instanceof THREE.Mesh || o instanceof Line2) {
+  function dispose(group: THREE.Object3D) {
+    group.traverse((o) => {
+      if (o instanceof THREE.Mesh || o instanceof Line2 || o instanceof THREE.Line) {
         o.geometry.dispose();
         (Array.isArray(o.material) ? o.material : [o.material]).forEach((m) => m.dispose());
       }
     });
+  }
+
+  function clear() {
+    gizmo?.detach();
+    dispose(content);
     scene.remove(content);
     content = new THREE.Group();
     handles = new Map();
@@ -124,6 +130,13 @@
         handles.set(key(r.id, i), handle);
         content.add(handle);
       });
+      // Hangers: a rod up from the pipe towards the body.
+      const hanger = new THREE.MeshStandardMaterial({ color: 0x2b2f36, metalness: 0.6, roughness: 0.4 });
+      for (const h of r.hangers) {
+        const rod = frustum(v3(h), v3(h).add(new THREE.Vector3(0, 0, r.od_mm / 2 + 60)), 8, 8, hanger);
+        rod.userData.pick = pick;
+        content.add(rod);
+      }
     }
     for (const e of layout.elements) {
       const chosen = selection?.kind === 'element' && selection.id === e.id;
@@ -156,9 +169,10 @@
     if (!framed) frame();
   }
 
-  /** Fits the whole system in view, seen from the car's right side, slightly from above. */
+  /** Fits the whole system (and the scan) in view, seen from the car's right side, slightly from above. */
   function frame() {
     const box = new THREE.Box3().setFromObject(content);
+    if (scanObject) box.union(new THREE.Box3().setFromObject(scanObject));
     if (box.isEmpty()) return;
     const sphere = box.getBoundingSphere(new THREE.Sphere());
     const fov = (camera.fov * Math.PI) / 180;
@@ -223,11 +237,25 @@
     let down: { x: number; y: number } | null = null;
     const raycaster = new THREE.Raycaster();
     renderer.domElement.addEventListener('pointerdown', (e) => (down = { x: e.clientX, y: e.clientY }));
+    raycaster.firstHitOnly = true;
     renderer.domElement.addEventListener('pointerup', (e) => {
       if (!down || gizmo.dragging || Math.hypot(e.clientX - down.x, e.clientY - down.y) > 4) return;
       const rect = renderer.domElement.getBoundingClientRect();
       const ndc = new THREE.Vector2(((e.clientX - rect.left) / rect.width) * 2 - 1, -((e.clientY - rect.top) / rect.height) * 2 + 1);
       raycaster.setFromCamera(ndc, camera);
+      const k = app.picking;
+      if (k !== null && scanObject) {
+        const [onScan] = raycaster.intersectObject(scanObject, false);
+        if (!onScan) return;
+        // Back into scan coordinates, which the project stores.
+        const p = scanObject.worldToLocal(onScan.point.clone());
+        editFabrication((project) => {
+          const scan = project.fabrication?.scan;
+          if (scan) scan.scan_points[k] = [p.x, p.y, p.z];
+        });
+        app.picking = null;
+        return;
+      }
       const hit = raycaster.intersectObjects(content.children, false).find((h) => h.object.userData.pick);
       const pick = hit?.object.userData.pick as Pick | undefined;
       const piece = hit?.object.userData.piece as PieceLayout | undefined;
@@ -263,6 +291,90 @@
     framed = false;
   });
 
+  /** Scan coordinates to the car's: the placement the reference points give, else only the unit. */
+  const scanMatrix = $derived.by(() => {
+    const unit = app.project?.fabrication?.scan?.unit_mm ?? 1;
+    const scaling = new THREE.Matrix4().makeScale(unit, unit, unit);
+    const p = app.clearance?.placement;
+    if (!p) return scaling;
+    const [r, t] = [p.rotation, p.translation];
+    return new THREE.Matrix4()
+      .set(r[0][0], r[0][1], r[0][2], t[0], r[1][0], r[1][1], r[1][2], t[1], r[2][0], r[2][1], r[2][2], t[2], 0, 0, 0, 1)
+      .multiply(scaling);
+  });
+
+  // The scan, see-through so the pipes show beneath it; picked through a BVH.
+  $effect(() => {
+    const mesh = app.scanMesh;
+    if (!scene || !mesh) return;
+    const geometry = new THREE.BufferGeometry();
+    geometry.setAttribute('position', new THREE.BufferAttribute(mesh.positions, 3));
+    geometry.setIndex(new THREE.BufferAttribute(mesh.index, 1));
+    geometry.boundsTree = new MeshBVH(geometry);
+    const material = new THREE.MeshStandardMaterial({
+      color: 0x9aa6b8,
+      flatShading: true,
+      side: THREE.DoubleSide,
+      transparent: true,
+      opacity: 0.35,
+      depthWrite: false,
+    });
+    const object = new THREE.Mesh(geometry, material);
+    object.raycast = acceleratedRaycast;
+    object.matrixAutoUpdate = false;
+    object.matrix.copy(untrack(() => scanMatrix));
+    scene.add(object);
+    scanObject = object;
+    untrack(frame);
+    return () => {
+      scene.remove(object);
+      geometry.dispose();
+      material.dispose();
+      scanObject = null;
+    };
+  });
+
+  $effect(() => {
+    if (!scanObject) return;
+    scanObject.matrix.copy(scanMatrix);
+    scanObject.matrixWorldNeedsUpdate = true;
+  });
+
+  // Reference points (solid on the scan, wireframe where they belong on the car) and contacts.
+  $effect(() => {
+    const scan = app.project?.fabrication?.scan;
+    const contacts = app.clearance?.contacts ?? [];
+    if (!scene) return;
+    const group = new THREE.Group();
+    const marker = (at: THREE.Vector3, radius: number, color: string | number, wireframe = false) => {
+      const m = new THREE.Mesh(new THREE.SphereGeometry(radius, 16, 12), new THREE.MeshBasicMaterial({ color, wireframe }));
+      m.position.copy(at);
+      group.add(m);
+    };
+    const given = (p: readonly number[]) => p.some((x) => x !== 0);
+    scan?.scan_points.forEach((p, k) => {
+      if (given(p)) marker(v3(p).applyMatrix4(scanMatrix), 35, REFERENCE_COLOURS[k]);
+      if (given(scan.vehicle_points_mm[k])) marker(v3(scan.vehicle_points_mm[k]), 50, REFERENCE_COLOURS[k], true);
+    });
+    for (const c of contacts) {
+      marker(v3(c.scan_point), 12, 0xff6b6b);
+      const line = new THREE.Line(
+        new THREE.BufferGeometry().setFromPoints([v3(c.at), v3(c.scan_point)]),
+        new THREE.LineBasicMaterial({ color: 0xff6b6b }),
+      );
+      group.add(line);
+    }
+    scene.add(group);
+    return () => {
+      scene.remove(group);
+      dispose(group);
+    };
+  });
+
+  $effect(() => {
+    if (renderer) renderer.domElement.style.cursor = app.picking !== null && app.scanMesh ? 'crosshair' : '';
+  });
+
   $effect(() => {
     const ground = app.project?.ambient.ground_z_mm;
     if (!scene || ground === undefined) return;
@@ -281,7 +393,11 @@
 <div class="viewport" bind:this={host} data-testid="viewport">
   <div class="legend muted">
     X forward · Y left · Z up · mm · origin at the downpipe flange<br />
-    Click to select · drag a via point's arrows to move it
+    {#if app.picking !== null}
+      Click the scan to place reference point {app.picking + 1}
+    {:else}
+      Click to select · drag a via point's arrows to move it
+    {/if}
   </div>
 </div>
 

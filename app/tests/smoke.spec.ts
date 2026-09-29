@@ -40,3 +40,19 @@ test('a time-domain sweep streams in and is labelled as the reference', async ({
   await expect(page.getByTestId('drone')).toContainText('time domain');
   await page.screenshot({ path: 'test-results/time-domain.png' });
 });
+
+test('fabrication lists the parts and takes reference points picked on a scan', async ({ page }) => {
+  await page.getByRole('tab', { name: 'Fabrication' }).click();
+  await expect(page.getByTestId('parts')).toContainText('rear-pipe/B1');
+  // The reference project is not saved: there is nowhere to write the package.
+  await expect(page.getByRole('button', { name: 'Export package' })).toBeDisabled();
+  await page.getByRole('button', { name: 'Load scan…' }).click();
+  await expect(page.getByTestId('scan')).toContainText('2 triangles');
+  await expect(page.getByTestId('clearance-unavailable')).toContainText('in a line');
+  const first = page.getByTestId('reference-point').first();
+  await first.getByRole('button', { name: 'Pick on scan' }).click();
+  await page.getByTestId('viewport').locator('canvas').click();
+  // On the scan's plane, in scan units.
+  await expect(first).toContainText(/-?\d+\.\d{3}, -?\d+\.\d{3}, 0\.200/);
+  await page.screenshot({ path: 'test-results/fabrication.png' });
+});

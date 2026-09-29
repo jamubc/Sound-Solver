@@ -10,3 +10,5 @@ export const db = (x: number) => `${x.toFixed(1)} dB`;
 export const rpm = (x: number) => `${Math.round(x)} rpm`;
 
 export const vec = (v: readonly number[]) => v.map((x) => x.toFixed(0)).join(', ');
+
+export const JOINT: Record<string, string> = { butt: 'butt weld', slip: 'slip joint', v_band: 'V-band', flange: 'flange' };

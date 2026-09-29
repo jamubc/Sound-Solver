@@ -14,6 +14,7 @@ const cli = (...args) =>
 mkdirSync('tests/fixtures', { recursive: true });
 copyFileSync(`../${project}`, 'tests/fixtures/project.json');
 cli('export', 'layout', project, '-o', out('layout'));
+cli('export', 'fabrication', project, '-o', out('fabrication'));
 cli('export', 'manifests', '-o', out('manifests'));
 cli('solve', project, '--solver', 'four-pole', '-o', out('preview'));
 cli('solve', project, '--sweep', '2000:3000:500', '-o', out('solve'));

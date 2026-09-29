@@ -6,18 +6,19 @@
 //! finishes and cached on disk under the project's BLAKE3 hash, so an unchanged project never
 //! solves twice. A newer sweep supersedes an older one: points not yet started are dropped.
 
-use std::path::PathBuf;
+use std::path::{Path, PathBuf};
 use std::sync::atomic::{AtomicU64, Ordering};
 
-use exhaust_core::edit;
+use exhaust_core::fabricate::{self, Package};
 use exhaust_core::layout::{Layout, layout};
 use exhaust_core::manifest::{self, Manifest};
-use exhaust_core::metrics;
 use exhaust_core::project::Project;
+use exhaust_core::scan::{self, Clearance, Mesh};
 use exhaust_core::solve::{self, PointOutcome, SolverKind, SweepResult};
+use exhaust_core::{edit, metrics};
 use rayon::prelude::*;
 use serde_json::Value;
-use tauri::ipc::Channel;
+use tauri::ipc::{Channel, Response};
 use tauri::{AppHandle, Manager};
 
 /// The reference project the app opens with.
@@ -39,16 +40,112 @@ fn stock_project() -> Value {
     serde_json::from_str(STOCK_W205).expect("reference case is JSON")
 }
 
+/// The directory of the project file `path`.
+fn dir(path: &Path) -> &Path {
+    path.parent().unwrap_or(Path::new("."))
+}
+
+fn read_mesh(file: &Path) -> Result<Mesh, String> {
+    let bytes = std::fs::read(file).map_err(|e| format!("{}: {e}", file.display()))?;
+    Mesh::parse(&file.to_string_lossy(), &bytes).map_err(|e| format!("{}: {e}", file.display()))
+}
+
+/// Runs CPU-heavy work off the main thread.
+async fn blocking<T: Send + 'static>(
+    work: impl FnOnce() -> Result<T, String> + Send + 'static,
+) -> Result<T, String> {
+    tauri::async_runtime::spawn_blocking(work)
+        .await
+        .map_err(|e| e.to_string())?
+}
+
+/// Straights, bends, stock sticks and joints of the project as drawn.
+#[tauri::command]
+fn fabrication(project: Value) -> Result<Package, String> {
+    fabricate::check(&parse(&project)?).map_err(|e| e.to_string())
+}
+
+/// Writes the fabrication files beside the project file `path`; answers their paths.
+#[tauri::command]
+async fn export_package(project: Value, path: PathBuf) -> Result<Vec<String>, String> {
+    let project = parse(&project)?;
+    blocking(move || {
+        let scan = match &project.fabrication.scan {
+            Some(s) => Some(read_mesh(&dir(&path).join(&s.path))?),
+            None => None,
+        };
+        let stem = path
+            .file_stem()
+            .and_then(|s| s.to_str())
+            .unwrap_or("project");
+        let files = fabricate::files(&project, stem, scan.as_ref()).map_err(|e| e.to_string())?;
+        files
+            .into_iter()
+            .map(|(name, bytes)| {
+                let target = dir(&path).join(name);
+                std::fs::write(&target, bytes).map_err(|e| format!("{}: {e}", target.display()))?;
+                Ok(target.display().to_string())
+            })
+            .collect()
+    })
+    .await
+}
+
+/// A scan file as a mesh for the viewport, in scan units: vertex and triangle counts (u32),
+/// then positions (3 × f32 per vertex) and corners (3 × u32 per triangle), little-endian.
+#[tauri::command]
+async fn scan_mesh(file: PathBuf) -> Result<Response, String> {
+    blocking(move || {
+        let mesh = read_mesh(&file)?;
+        let mut out = Vec::with_capacity(8 + 12 * mesh.vertices.len() + 12 * mesh.triangles.len());
+        out.extend((mesh.vertices.len() as u32).to_le_bytes());
+        out.extend((mesh.triangles.len() as u32).to_le_bytes());
+        for v in &mesh.vertices {
+            v.iter().for_each(|x| out.extend((*x as f32).to_le_bytes()));
+        }
+        for t in &mesh.triangles {
+            t.iter().for_each(|i| out.extend(i.to_le_bytes()));
+        }
+        Ok(Response::new(out))
+    })
+    .await
+}
+
+/// Pipe clearance to the project's scan, placed by its reference points.
+#[tauri::command]
+async fn clearance(project: Value) -> Result<Clearance, String> {
+    let project = parse(&project)?;
+    blocking(move || {
+        let file = &project
+            .fabrication
+            .scan
+            .as_ref()
+            .ok_or("the project has no scan")?
+            .path;
+        scan::clearance(&project, &read_mesh(Path::new(file))?).map_err(|e| e.to_string())
+    })
+    .await
+}
+
+/// The app holds the scan path absolute; the file holds it relative to the project file.
 #[tauri::command]
 fn open_project(path: PathBuf) -> Result<Value, String> {
     let text = std::fs::read_to_string(&path).map_err(|e| format!("{}: {e}", path.display()))?;
-    let project = Project::from_json(&text).map_err(|e| e.to_string())?;
+    let mut project = Project::from_json(&text).map_err(|e| e.to_string())?;
+    if let Some(scan) = &mut project.fabrication.scan {
+        scan.path = dir(&path).join(&scan.path).display().to_string();
+    }
     Ok(to_value(&project))
 }
 
 #[tauri::command]
 fn save_project(path: PathBuf, project: Value) -> Result<(), String> {
-    let project = parse(&project)?;
+    let mut project = parse(&project)?;
+    if let Some(scan) = &mut project.fabrication.scan
+        && let Ok(inside) = Path::new(&scan.path).strip_prefix(dir(&path))
+    {
+        scan.path = inside.display().to_string();
+    }
     std::fs::write(&path, project.to_json()).map_err(|e| format!("{}: {e}", path.display()))
 }
 
@@ -171,7 +268,11 @@ pub fn run() {
             remove_element,
             preview,
             solve,
-            cancel
+            cancel,
+            fabrication,
+            export_package,
+            scan_mesh,
+            clearance
         ])
         .run(tauri::generate_context!())
         .expect("error while running the app");
@@ -180,7 +281,7 @@ pub fn run() {
 #[cfg(test)]
 mod tests {
     use serde_json::json;
-    use tauri::ipc::{CallbackFn, InvokeBody};
+    use tauri::ipc::{CallbackFn, InvokeBody, InvokeResponseBody};
     use tauri::test::{INVOKE_KEY, get_ipc_response, mock_builder, mock_context, noop_assets};
     use tauri::webview::InvokeRequest;
 
@@ -196,24 +297,31 @@ mod tests {
                 manifests,
                 insert_element,
                 remove_element,
-                preview
+                preview,
+                open_project,
+                save_project,
+                fabrication,
+                export_package,
+                scan_mesh,
+                clearance
             ])
             .build(mock_context(noop_assets()))
             .expect("app builds");
         let webview = tauri::WebviewWindowBuilder::new(&app, "main", Default::default())
             .build()
             .expect("webview");
+        let request = |cmd: &str, args: Value| InvokeRequest {
+            cmd: cmd.into(),
+            callback: CallbackFn(0),
+            error: CallbackFn(1),
+            url: "tauri://localhost".parse().unwrap(),
+            body: InvokeBody::Json(args),
+            headers: Default::default(),
+            invoke_key: INVOKE_KEY.to_string(),
+        };
         let call = |cmd: &str, args: Value| {
-            let request = InvokeRequest {
-                cmd: cmd.into(),
-                callback: CallbackFn(0),
-                error: CallbackFn(1),
-                url: "tauri://localhost".parse().unwrap(),
-                body: InvokeBody::Json(args),
-                headers: Default::default(),
-                invoke_key: INVOKE_KEY.to_string(),
-            };
-            get_ipc_response(&webview, request).map(|b| b.deserialize::<Value>().unwrap())
+            get_ipc_response(&webview, request(cmd, args))
+                .map(|b| b.deserialize::<Value>().unwrap())
         };
         let project = call("stock_project", json!({})).expect("reference project");
         let layout =
@@ -245,5 +353,55 @@ mod tests {
             reason.as_str().unwrap().contains("must be 40–600 mm"),
             "{reason}"
         );
+
+        let parts = call("fabrication", json!({ "project": project })).expect("parts");
+        assert_eq!(parts["routes"].as_array().unwrap().len(), 6);
+        // A flat underbody 200 mm above the flange, scanned in metres, beside a saved project.
+        let dir = std::env::temp_dir().join(format!("exhaust-app-test-{}", std::process::id()));
+        std::fs::create_dir_all(&dir).unwrap();
+        let floor = dir.join("floor.stl");
+        let facet = |c: [[f64; 2]; 3]| {
+            let v: String = c
+                .iter()
+                .map(|[x, y]| format!("vertex {x} {y} 0.2\n"))
+                .collect();
+            format!("facet normal 0 0 1\nouter loop\n{v}endloop\nendfacet\n")
+        };
+        let stl = facet([[-5.0, -2.0], [2.0, -2.0], [2.0, 2.0]])
+            + &facet([[-5.0, -2.0], [2.0, 2.0], [-5.0, 2.0]]);
+        std::fs::write(&floor, format!("solid floor\n{stl}endsolid floor\n")).unwrap();
+        let Ok(InvokeResponseBody::Raw(mesh)) =
+            get_ipc_response(&webview, request("scan_mesh", json!({ "file": floor })))
+        else {
+            panic!("scan mesh as bytes");
+        };
+        assert_eq!(mesh.len(), 8 + 6 * 12 + 2 * 12);
+        let mut scanned = project.clone();
+        scanned["fabrication"]["scan"] = json!({
+            "path": floor,
+            "unit_mm": 1000.0,
+            "scan_points": [[-4.0, -1.0, 0.2], [1.0, -1.0, 0.2], [-4.0, 1.0, 0.2]],
+            "vehicle_points_mm": [[-4000.0, -1000.0, 200.0], [1000.0, -1000.0, 200.0], [-4000.0, 1000.0, 200.0]],
+        });
+        let clearance = call("clearance", json!({ "project": scanned })).expect("clearance");
+        assert!(clearance["placement"]["residual_mm"].as_f64().unwrap() < 1e-6);
+        assert_eq!(clearance["routes"].as_array().unwrap().len(), 6);
+        // The file holds the scan path relative to itself; the app holds it absolute.
+        let path = dir.join("w205.json");
+        call("save_project", json!({ "path": path, "project": scanned })).expect("saved");
+        assert!(
+            std::fs::read_to_string(&path)
+                .unwrap()
+                .contains("\"path\": \"floor.stl\"")
+        );
+        let reopened = call("open_project", json!({ "path": path })).expect("reopened");
+        assert_eq!(reopened["fabrication"]["scan"]["path"], json!(floor));
+        let files = call(
+            "export_package",
+            json!({ "project": scanned, "path": path }),
+        )
+        .expect("package");
+        assert_eq!(files.as_array().unwrap().len(), 6, "{files}");
+        std::fs::remove_dir_all(&dir).unwrap();
     }
 }

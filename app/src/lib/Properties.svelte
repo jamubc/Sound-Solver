@@ -1,8 +1,8 @@
 <script lang="ts">
   import { backend } from './backend';
-  import { mm } from './format';
-  import { app, commit, edit, manifestOf } from './state.svelte';
-  import type { Element, Project, Route } from './types/project';
+  import { JOINT, mm } from './format';
+  import { app, commit, edit, editFabrication, manifestOf } from './state.svelte';
+  import type { Element, Joint, Project, Route } from './types/project';
 
   type Vec3 = [number, number, number];
   /** Stock mandrel-bend radii as multiples of the pipe OD; the solver defaults to 1.5D. */
@@ -94,6 +94,27 @@
       failure = String(e);
     }
   }
+
+  function setHangers(id: string, change: (hangers: number[]) => void) {
+    editFabrication((p) => {
+      const r = findRoute(p, id);
+      const hangers = [...(r.hangers_mm ?? [])];
+      change(hangers);
+      r.hangers_mm = hangers.sort((a, b) => a - b);
+    });
+  }
+
+  function setJoint(id: string, end: 'start_joint' | 'end_joint', joint: string) {
+    editFabrication((p) => {
+      const r = findRoute(p, id);
+      if (joint) r[end] = joint as Joint;
+      else delete r[end];
+    });
+  }
+
+  /** The joint the fabrication package assumes where none is given. */
+  const defaultJoint = (element: string) =>
+    app.project?.system.elements.find((e) => e.id === element)?.type === 'source' ? JOINT.flange : JOINT.butt;
 
   function removeVia(id: string, i: number) {
     edit((p) => {
@@ -263,6 +284,34 @@
       pipe to pick a spot
     </div>
     {#if failure}<p class="failure">{failure}</p>{/if}
+    <h2 class="gap">Hangers</h2>
+    {#each route.hangers_mm ?? [] as h, i}
+      <div class="row hanger" data-testid="hanger">
+        <span class="label">#{i + 1}</span>
+        <input
+          type="number"
+          step="1"
+          min="0"
+          value={h}
+          onchange={(e) => setHangers(route.id, (hs) => (hs[i] = num(e)))}
+        />
+        <span class="unit">mm along</span>
+        <button title="Remove this hanger" onclick={() => setHangers(route.id, (hs) => hs.splice(i, 1))}>×</button>
+      </div>
+    {/each}
+    <button onclick={() => setHangers(route.id, (hs) => hs.push(placeAt ?? 0))}>
+      Add hanger at {placeAt ?? 0} mm
+    </button>
+    <h2 class="gap">Joints</h2>
+    {#each [['start_joint', route.from.element], ['end_joint', route.to.element]] as const as [end, at]}
+      <label class="row">
+        <span class="label">At {at}</span>
+        <select value={route[end] ?? ''} onchange={(e) => setJoint(route.id, end, e.currentTarget.value)}>
+          <option value="">default: {defaultJoint(at)}</option>
+          {#each Object.entries(JOINT) as [j, name]}<option value={j}>{name}</option>{/each}
+        </select>
+      </label>
+    {/each}
   {:else}
     <p class="muted">Select a route or element, here or in the viewport.</p>
   {/if}
@@ -325,6 +374,10 @@
 
   .row.place {
     grid-template-columns: minmax(0, 1fr) 70px auto auto;
+  }
+
+  .row.hanger {
+    grid-template-columns: 110px minmax(0, 1fr) auto auto;
   }
 
   .failure {

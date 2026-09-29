@@ -1,8 +1,8 @@
 // Application state. The project is the schema's JSON, edited in place; after every edit the
 // backend re-validates and lays it out, and the four-pole preview reruns. Time-domain results
 // belong to the project they were solved for, so an edit clears them.
-import { backend } from './backend';
-import type { Layout, Manifest, PointOutcome, PointResult, SweepResult } from './types/api';
+import { backend, type ScanMesh } from './backend';
+import type { Clearance, Layout, Manifest, PointOutcome, PointResult, SweepResult } from './types/api';
 import type { Project } from './types/project';
 
 export type Selection =
@@ -22,6 +22,9 @@ interface TimeDomain {
 
 const idle = (): TimeDomain => ({ running: false, points: [], result: null, error: null, total: 0 });
 
+/** Colours of the three scan reference points, in the panel and the viewport. */
+export const REFERENCE_COLOURS = ['#4fd1c5', '#ff79c6', '#c792ea'];
+
 export const app = $state({
   project: null as Project | null,
   path: null as string | null,
@@ -37,6 +40,13 @@ export const app = $state({
   selection: null as Selection | null,
   /** Engine speed whose spectrum is shown. */
   rpm: null as number | null,
+  scanMesh: null as ScanMesh | null,
+  scanError: null as string | null,
+  clearance: null as Clearance | null,
+  /** Why the scan cannot be placed or measured. */
+  clearanceError: null as string | null,
+  /** The scan reference point (0–2) the next click on the scan sets. */
+  picking: null as number | null,
 });
 
 let timer: ReturnType<typeof setTimeout> | undefined;
@@ -65,6 +75,7 @@ async function runRefresh() {
     }
     return;
   }
+  void measureClearance(project, run);
   const start = performance.now();
   try {
     const preview = await backend.preview(project);
@@ -78,6 +89,40 @@ async function runRefresh() {
       app.preview = null;
       app.previewError = String(e);
     }
+  }
+}
+
+async function measureClearance(project: Project, run: number) {
+  const scan = project.fabrication?.scan;
+  if (!scan) app.scanMesh = null;
+  else if (app.scanMesh?.file !== scan.path) void loadScanMesh(scan.path);
+  let clearance: Clearance | null = null;
+  let error: string | null = null;
+  if (scan) {
+    try {
+      clearance = await backend.clearance(project);
+    } catch (e) {
+      error = String(e);
+    }
+  }
+  if (run !== refreshRun) return;
+  app.clearance = clearance;
+  app.clearanceError = error;
+}
+
+let scanLoading: string | null = null;
+
+async function loadScanMesh(file: string) {
+  if (scanLoading === file) return;
+  scanLoading = file;
+  app.scanError = null;
+  try {
+    const mesh = await backend.scanMesh(file);
+    if (app.project?.fabrication?.scan?.path === file) app.scanMesh = mesh;
+  } catch (e) {
+    app.scanError = String(e);
+  } finally {
+    scanLoading = null;
   }
 }
 
@@ -98,6 +143,10 @@ export function load(project: Project, path: string | null) {
   app.layout = null;
   app.preview = null;
   app.timeDomain = idle();
+  app.scanMesh = null;
+  app.clearance = null;
+  app.clearanceError = null;
+  app.picking = null;
   refresh(0);
 }
 
@@ -109,6 +158,14 @@ export function edit(change: (project: Project) => void) {
   if (app.timeDomain.running) void backend.cancel();
   solveRun++;
   app.timeDomain = idle();
+  refresh();
+}
+
+/** Applies an edit to fabrication data (stock, scan, hangers, joints), which no result depends on. */
+export function editFabrication(change: (project: Project) => void) {
+  if (!app.project) return;
+  change(app.project);
+  app.dirty = true;
   refresh();
 }
 

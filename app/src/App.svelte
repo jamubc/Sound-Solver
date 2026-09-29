@@ -1,6 +1,7 @@
 <script lang="ts">
   import { onMount } from 'svelte';
   import { backend } from './lib/backend';
+  import Fabrication from './lib/Fabrication.svelte';
   import Plots from './lib/Plots.svelte';
   import Properties from './lib/Properties.svelte';
   import { app, load } from './lib/state.svelte';
@@ -9,6 +10,7 @@
   import Viewport from './lib/Viewport.svelte';
 
   let unavailable = $state<string | null>(null);
+  let tab = $state<'acoustics' | 'fabrication'>('acoustics');
 
   onMount(async () => {
     try {
@@ -38,7 +40,18 @@
     <Viewport />
   </main>
   <section class="plots">
-    <Plots />
+    <div class="tabs" role="tablist">
+      {#each ['acoustics', 'fabrication'] as const as t}
+        <button role="tab" aria-selected={tab === t} class:on={tab === t} onclick={() => (tab = t)}>
+          {t === 'acoustics' ? 'Acoustics' : 'Fabrication'}
+        </button>
+      {/each}
+    </div>
+    {#if tab === 'acoustics'}
+      <Plots />
+    {:else}
+      <Fabrication />
+    {/if}
   </section>
 </div>
 
@@ -93,5 +106,27 @@
     overflow-y: auto;
     border-left: 1px solid var(--line);
     background: var(--panel);
+  }
+
+  .tabs {
+    position: sticky;
+    top: 0;
+    z-index: 1;
+    display: flex;
+    gap: 4px;
+    padding: 8px 12px 0;
+    border-bottom: 1px solid var(--line);
+    background: var(--panel);
+  }
+
+  .tabs button {
+    border-bottom: none;
+    border-radius: 4px 4px 0 0;
+    background: none;
+  }
+
+  .tabs button.on {
+    background: var(--panel-2);
+    border-color: var(--accent);
   }
 </style>

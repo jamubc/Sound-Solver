@@ -1,5 +1,6 @@
 // Stands in for the Tauri backend in a plain browser: every command answers with what the
-// real core returned for the reference project (fixtures from `npm run fixtures`).
+// real core returned for the reference project (fixtures from `npm run fixtures`). The file
+// dialog picks a synthetic underbody scan.
 import { readFileSync } from 'node:fs';
 import type { Page } from '@playwright/test';
 
@@ -12,6 +13,7 @@ export async function mockBackend(page: Page) {
     layout: fixture('layout'),
     manifests: fixture('manifests'),
     preview: fixture('preview'),
+    fabrication: fixture('fabrication'),
     solve: fixture('solve') as { points: unknown[] },
   };
   await page.addInitScript((a) => {
@@ -28,6 +30,21 @@ export async function mockBackend(page: Page) {
         a.solve.points.forEach((point, index) => channel({ index, message: point }));
         channel({ index: a.solve.points.length, end: true });
         return a.solve;
+      },
+      fabrication: () => a.fabrication,
+      'plugin:dialog|open': () => '/scans/floor.stl',
+      // A flat underbody 200 mm above the flange, in metres: 4 vertices, 2 triangles.
+      scan_mesh: () => {
+        const v = [-4, -1, 0.2, 1, -1, 0.2, 1, 1, 0.2, -4, 1, 0.2];
+        const bytes = new ArrayBuffer(8 + 4 * v.length + 4 * 6);
+        new Uint32Array(bytes, 0, 2).set([4, 2]);
+        new Float32Array(bytes, 8, v.length).set(v);
+        new Uint32Array(bytes, 8 + 4 * v.length, 6).set([0, 1, 2, 0, 2, 3]);
+        return bytes;
+      },
+      // The core's answer until three reference points are picked.
+      clearance: () => {
+        throw 'scan reference points are (nearly) in a line';
       },
     };
     (window as unknown as Record<string, unknown>).__TAURI_INTERNALS__ = {
