@@ -21,7 +21,9 @@
 //! the mouth is not modelled.
 //!
 //! Uncertainty: every heat-transfer coefficient scaled by `1 ± 0.3` gives the band reported
-//! with the profile (`t_gas_band`), and through `c = √(γRT)` the band on tuned lengths.
+//! with the profile (`t_gas_band`), and through `c = √(γRT)` the band on tuned lengths. At the
+//! band's hot bound dead-end branches hold the main flow's gas temperature at their root: the
+//! most the heat carried in at the mouth could give them.
 
 use std::collections::VecDeque;
 use std::f64::consts::PI;
@@ -122,10 +124,10 @@ fn wall_balance(
 /// Solves the profile. `source` is the node the mean flow starts from.
 pub fn solve(net: &Network, source: usize, inp: &ThermalInputs) -> Result<ThermalProfile> {
     let flow = mean_flows(net, source, inp.mass_flow)?;
-    let run = |scale: f64| march(net, source, inp, &flow, scale);
-    let (t_gas, t_wall) = run(1.0);
-    let hot = run(1.0 - H_UNCERTAINTY).0;
-    let cold = run(1.0 + H_UNCERTAINTY).0;
+    let run = |scale: f64, hot: bool| march(net, source, inp, &flow, scale, hot);
+    let (t_gas, t_wall) = run(1.0, false);
+    let hot = run(1.0 - H_UNCERTAINTY, true).0;
+    let cold = run(1.0 + H_UNCERTAINTY, false).0;
     let mass_flow = flow
         .iter()
         .map(|f| {
@@ -222,12 +224,15 @@ pub fn mean_flows(net: &Network, source: usize, total: f64) -> Result<Vec<Option
 
 type Profile = (Vec<Vec<f64>>, Vec<Vec<f64>>);
 
+/// Gas and wall temperatures with heat transfer scaled by `scale`; `hot_dead_ends` holds dead
+/// ends at their root's gas temperature.
 fn march(
     net: &Network,
     source: usize,
     inp: &ThermalInputs,
     flow: &[Option<(f64, bool)>],
     scale: f64,
+    hot_dead_ends: bool,
 ) -> Profile {
     let gas = &net.gas;
     let mut t_gas: Vec<Vec<f64>> = net.ducts.iter().map(|d| vec![f64::NAN; d.n()]).collect();
@@ -326,6 +331,7 @@ fn march(
                 };
                 let n = duct.n();
                 let temps = match &duct.wall {
+                    Some(_) if hot_dead_ends => vec![tg_root; n],
                     Some(w) => fin(
                         duct.dx * n as f64,
                         duct.diameter[0],

@@ -22,6 +22,7 @@ pub mod solid;
 pub mod solve;
 pub mod spectrum;
 pub mod thermal;
+pub mod tune;
 pub mod validation;
 
 pub use error::{Error, Result};

@@ -9,6 +9,7 @@ use exhaust_core::layout::layout;
 use exhaust_core::project::{Project, sweep_points};
 use exhaust_core::scan::{self, Mesh};
 use exhaust_core::solve::{SolverKind, sweep};
+use exhaust_core::tune::tune;
 use exhaust_core::validation::{PENDING, cases};
 use exhaust_core::{fabricate, manifest, solid};
 
@@ -79,6 +80,25 @@ enum Command {
         /// Write here instead of standard output (a directory for `package`).
         #[arg(long, short)]
         out: Option<PathBuf>,
+    },
+    /// Size a stub's length or a Helmholtz resonator's volume to put its resonance on a
+    /// drone, with the thermal band; prints JSON.
+    Tune {
+        /// Project file (JSON).
+        project: PathBuf,
+        /// The stub or Helmholtz resonator element.
+        #[arg(long)]
+        element: String,
+        /// Engine speed of the drone: the branch gas takes its thermal state.
+        #[arg(long)]
+        rpm: f64,
+        /// Target, Hz; defaults to the firing order's frequency at `--rpm`.
+        #[arg(long)]
+        frequency: Option<f64>,
+        /// Measured branch gas temperature as `lowest:highest`, K, instead of the thermal
+        /// model's.
+        #[arg(long)]
+        branch_temperature: Option<String>,
     },
     /// Run the analytic validation suite; exits non-zero if any check fails.
     Validate {
@@ -176,6 +196,31 @@ fn run(cli: Cli) -> Result<ExitCode, String> {
                     }
                 }
             }
+            Ok(ExitCode::SUCCESS)
+        }
+        Command::Tune {
+            project,
+            element,
+            rpm,
+            frequency,
+            branch_temperature,
+        } => {
+            let project = read_project(&project)?;
+            let firing = project.engine.geometry.firing_order.len() as f64 / 2.0 * rpm / 60.0;
+            let stated = match branch_temperature {
+                Some(s) => match s.split_once(':').map(|(a, b)| (a.parse(), b.parse())) {
+                    Some((Ok(lo), Ok(hi))) if lo > 0.0 && hi >= lo => Some([lo, hi]),
+                    _ => {
+                        return Err(format!(
+                            "--branch-temperature takes lowest:highest K, got '{s}'"
+                        ));
+                    }
+                },
+                None => None,
+            };
+            let tuning = tune(&project, &element, frequency.unwrap_or(firing), rpm, stated)
+                .map_err(|e| e.to_string())?;
+            emit(&tuning, None)?;
             Ok(ExitCode::SUCCESS)
         }
         Command::Validate { json, cases: only } => {

@@ -116,9 +116,9 @@ fn toward(port: Port, u: f64) -> f64 {
     }
 }
 
-type M2 = [[C64; 2]; 2];
+pub(crate) type M2 = [[C64; 2]; 2];
 
-fn mul(a: &M2, b: &M2) -> M2 {
+pub(crate) fn mul(a: &M2, b: &M2) -> M2 {
     [
         [
             a[0][0] * b[0][0] + a[0][1] * b[1][0],

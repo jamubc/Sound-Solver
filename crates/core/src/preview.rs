@@ -23,6 +23,7 @@ use rustfft::num_complex::Complex64;
 use crate::error::Result;
 use crate::fourpole::{self, CellMean, Drive, MeanState};
 use crate::gas::Gas;
+use crate::gas1d::nodes::NortonSource;
 use crate::gas1d::{JunctionKind, Node};
 use crate::model::{Model, SourceInputs, build};
 use crate::project::{Project, WallThermal};
@@ -90,6 +91,14 @@ pub fn mean_state(
     Ok((MeanState { cells }, desc))
 }
 
+/// The engine source's Norton equivalent at the model's speed: a run into ambient pressure.
+pub fn norton(model: &Model, gas: &Gas, p_amb: f64) -> Result<NortonSource> {
+    let Node::Source(src) = &model.network.nodes[model.source_node] else {
+        unreachable!("model records its source node")
+    };
+    src.norton(gas, p_amb, 900.0, SOURCE_CYCLES, SOURCE_SAMPLES)
+}
+
 pub fn solve_point(project: &Project, rpm: f64) -> Result<PointResult> {
     let gas = Gas::exhaust(project.gas.fuel_h_to_c, project.gas.lambda)?;
     let (evo, evo_source) = evo_state(project, &gas, rpm);
@@ -105,10 +114,7 @@ pub fn solve_point(project: &Project, rpm: f64) -> Result<PointResult> {
             t_init: 900.0,
         },
     )?;
-    let Node::Source(src) = &model.network.nodes[model.source_node] else {
-        unreachable!("model records its source node")
-    };
-    let norton = src.norton(&gas, p_amb, 900.0, SOURCE_CYCLES, SOURCE_SAMPLES)?;
+    let norton = norton(&model, &gas, p_amb)?;
     let (mean, thermal_desc) = mean_state(project, &model, norton.mean_mass_flow, norton.mean_t0)?;
     let net = &model.network;
     let f_cycle = rpm / 120.0;
