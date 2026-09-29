@@ -56,6 +56,9 @@
     <button onclick={openFile}>Open…</button>
     <button onclick={() => saveAs(app.path)} disabled={!app.project}>Save</button>
     <button onclick={() => saveAs(null)} disabled={!app.project}>Save as…</button>
+    <button data-testid="units" title="Show lengths in millimetres or inches" onclick={() => (app.inches = !app.inches)}>
+      {app.inches ? 'inches' : 'mm'}
+    </button>
     {#if app.timeDomain.running}
       <span class="mono" data-testid="td-progress">
         time domain {app.timeDomain.points.length}/{app.timeDomain.total}

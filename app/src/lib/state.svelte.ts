@@ -55,6 +55,8 @@ export const app = $state({
   /** The scan reference point (0–2) the next click on the scan sets. */
   picking: null as number | null,
   baseline: null as Baseline | null,
+  /** Show lengths in inches rather than millimetres. */
+  inches: false,
 });
 
 let timer: ReturnType<typeof setTimeout> | undefined;

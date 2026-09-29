@@ -30,6 +30,15 @@ test('element properties come from its manifest', async ({ page }) => {
   const properties = page.getByTestId('properties');
   await expect(properties).toContainText('Shell inner diameter');
   await expect(properties).toContainText('40–600 mm');
+  // Shown and entered in inches, held in millimetres.
+  await page.getByTestId('units').click();
+  await expect(properties).toContainText('1.575–23.622 in');
+  const diameter = properties.locator('input[max="23.622"]');
+  await expect(diameter).toHaveValue('7.874');
+  await diameter.fill('8');
+  await diameter.press('Tab');
+  await page.getByTestId('units').click();
+  await expect(properties.locator('input[max="600"]')).toHaveValue('203.2');
 });
 
 test('a time-domain sweep streams in and is labelled as the reference', async ({ page }) => {

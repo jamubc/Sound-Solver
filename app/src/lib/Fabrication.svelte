@@ -2,7 +2,7 @@
   import { open } from '@tauri-apps/plugin-dialog';
   import { untrack } from 'svelte';
   import { backend } from './backend';
-  import { fileName, JOINT, mm, od, vec } from './format';
+  import { fileName, fromShown, JOINT, lengthUnit, mm, od, shown, toShown, vec } from './format';
   import { app, editFabrication, REFERENCE_COLOURS } from './state.svelte';
   import type { Package, Part } from './types/api';
   import type { Fabrication, Project } from './types/project';
@@ -41,7 +41,9 @@
   });
 
   const num = (e: Event) => Number((e.currentTarget as HTMLInputElement).value);
-  const setFab = (change: (f: Fabrication) => void) =>
+  /** A length entered in the unit lengths show in, in millimetres. */
+  const len = (e: Event) => fromShown(num(e));
+  const setFab =(change: (f: Fabrication) => void) =>
     editFabrication((p) => {
       p.fabrication ??= {};
       change(p.fabrication);
@@ -124,9 +126,9 @@
   {#each value as x, k}
     <input
       type="number"
-      step="1"
-      value={x}
-      onchange={(e) => onchange(value.map((v, j) => (j === k ? num(e) : v)) as Vec3)}
+      step="any"
+      value={toShown(x)}
+      onchange={(e) => onchange(value.map((v, j) => (j === k ? len(e) : v)) as Vec3)}
     />
   {/each}
 {/snippet}
@@ -155,14 +157,14 @@
     {:else if pkg}
       {#each pkg.warnings as w}<p class="warn">{w}</p>{/each}
       {#each pkg.routes as r (r.route)}
-        <h3>{r.route} <span class="muted">{od(r.od_mm)} × {r.wall_mm} mm {r.material}, {mm(r.length_mm, 0)}</span></h3>
+        <h3>{r.route} <span class="muted">{od(r.od_mm)} × {mm(r.wall_mm)} {r.material}, {mm(r.length_mm, 0)}</span></h3>
         <ol>
           {#each r.parts as p (p.id)}
             <li>
               <span class="mono">{p.id}</span>
               {describe(p)}
               {#if p.kind !== 'branch' && p.hangers_mm.length}
-                <span class="muted">· hanger at {p.hangers_mm.map((h) => h.toFixed(0)).join(', ')} mm</span>
+                <span class="muted">· hanger at {p.hangers_mm.map(shown).join(', ')} {lengthUnit()}</span>
               {/if}
             </li>
           {/each}
@@ -172,7 +174,7 @@
       <ol>
         {#each pkg.sticks as s}
           <li>
-            {od(s.od_mm)} × {s.wall_mm} mm {s.material}: {s.cuts.join(', ')}
+            {od(s.od_mm)} × {mm(s.wall_mm)} {s.material}: {s.cuts.join(', ')}
             <span class="muted">· offcut {mm(s.offcut_mm, 0)}</span>
           </li>
         {/each}
@@ -207,7 +209,7 @@
       </label>
       <p class="muted">
         Three points fix where the scan sits on the car: pick each on the scan (jack pads, say) and give its
-        position on the car, mm from the downpipe flange.
+        position on the car ({lengthUnit()} from the downpipe flange).
       </p>
       {#each scan.scan_points as p, k}
         <div class="point" data-testid="reference-point">
@@ -221,7 +223,7 @@
           <div class="row">
             <span class="label">on the car</span>
             {@render vec3(scan.vehicle_points_mm[k], (v) => setFab((f) => (f.scan!.vehicle_points_mm[k] = v)))}
-            <span class="unit">mm</span>
+            <span class="unit">{lengthUnit()}</span>
           </div>
         </div>
       {/each}
@@ -235,19 +237,25 @@
     <h2>Clearance</h2>
     <label class="row">
       <span class="label">Gap wanted</span>
-      <input type="number" step="1" min="0" value={fab?.clearance_mm ?? 25} onchange={(e) => setFab((f) => (f.clearance_mm = num(e)))} />
-      <span class="unit">mm</span>
+      <input
+        type="number"
+        step="any"
+        min="0"
+        value={toShown(fab?.clearance_mm ?? 25)}
+        onchange={(e) => setFab((f) => (f.clearance_mm = len(e)))}
+      />
+      <span class="unit">{lengthUnit()}</span>
     </label>
     {#each fab?.clearance_zones ?? [] as z, i}
       <div class="row zone">
         <input value={z.name} onchange={(e) => setFab((f) => (f.clearance_zones![i].name = e.currentTarget.value))} />
-        <input type="number" step="10" value={z.x_min_mm} title="from x, mm" onchange={(e) => setFab((f) => (f.clearance_zones![i].x_min_mm = num(e)))} />
-        <input type="number" step="10" value={z.x_max_mm} title="to x, mm" onchange={(e) => setFab((f) => (f.clearance_zones![i].x_max_mm = num(e)))} />
-        <input type="number" step="1" value={z.clearance_mm} title="gap, mm" onchange={(e) => setFab((f) => (f.clearance_zones![i].clearance_mm = num(e)))} />
+        <input type="number" step="any" value={toShown(z.x_min_mm)} title="from x" onchange={(e) => setFab((f) => (f.clearance_zones![i].x_min_mm = len(e)))} />
+        <input type="number" step="any" value={toShown(z.x_max_mm)} title="to x" onchange={(e) => setFab((f) => (f.clearance_zones![i].x_max_mm = len(e)))} />
+        <input type="number" step="any" value={toShown(z.clearance_mm)} title="gap" onchange={(e) => setFab((f) => (f.clearance_zones![i].clearance_mm = len(e)))} />
         <button title="Remove this zone" onclick={() => setFab((f) => f.clearance_zones!.splice(i, 1))}>×</button>
       </div>
     {/each}
-    {#if fab?.clearance_zones?.length}<div class="range muted">name · from x · to x · gap, mm</div>{/if}
+    {#if fab?.clearance_zones?.length}<div class="range muted">name · from x · to x · gap, {lengthUnit()}</div>{/if}
     <button
       onclick={() =>
         setFab((f) => (f.clearance_zones = [...(f.clearance_zones ?? []), { name: 'zone', x_min_mm: 0, x_max_mm: 0, clearance_mm: 40 }]))}
@@ -260,7 +268,7 @@
       </p>
       {#if app.clearance.contacts.length}
         <table data-testid="contacts">
-          <thead><tr><th>Route</th><th>Along, mm</th><th>Closest</th><th>Wanted</th><th>Zone</th></tr></thead>
+          <thead><tr><th>Route</th><th>Along, {lengthUnit()}</th><th>Closest</th><th>Wanted</th><th>Zone</th></tr></thead>
           <tbody>
             {#each app.clearance.contacts as c}
               <tr>
@@ -272,7 +280,7 @@
                     >{c.route}</button
                   >
                 </td>
-                <td>{c.from_mm.toFixed(0)}–{c.to_mm.toFixed(0)}</td>
+                <td>{shown(c.from_mm)}–{shown(c.to_mm)}</td>
                 <td class="bad">{mm(c.min_mm, 0)}</td>
                 <td>{mm(c.wanted_mm, 0)}</td>
                 <td>{c.zone ?? ''}</td>
@@ -284,10 +292,12 @@
         <p class="good">No stretch is closer than wanted.</p>
       {/if}
       <table>
-        <thead><tr><th>Route</th><th>Closest</th><th>Along, mm</th><th>At (x, y, z), mm</th></tr></thead>
+        <thead>
+          <tr><th>Route</th><th>Closest</th><th>Along, {lengthUnit()}</th><th>At (x, y, z), {lengthUnit()}</th></tr>
+        </thead>
         <tbody>
           {#each app.clearance.routes as r}
-            <tr><td>{r.route}</td><td>{mm(r.min_mm, 0)}</td><td>{r.at_mm.toFixed(0)}</td><td>{vec(r.at)}</td></tr>
+            <tr><td>{r.route}</td><td>{mm(r.min_mm, 0)}</td><td>{shown(r.at_mm)}</td><td>{vec(r.at)}</td></tr>
           {/each}
         </tbody>
       </table>
@@ -302,13 +312,25 @@
     <h2>Stock</h2>
     <label class="row">
       <span class="label">Stick length</span>
-      <input type="number" step="1" min="1" value={fab?.stock_length_mm ?? 3048} onchange={(e) => setFab((f) => (f.stock_length_mm = num(e)))} />
-      <span class="unit">mm</span>
+      <input
+        type="number"
+        step="any"
+        min={toShown(1)}
+        value={toShown(fab?.stock_length_mm ?? 3048)}
+        onchange={(e) => setFab((f) => (f.stock_length_mm = len(e)))}
+      />
+      <span class="unit">{lengthUnit()}</span>
     </label>
     <label class="row">
       <span class="label">Saw kerf</span>
-      <input type="number" step="0.5" min="0" value={fab?.kerf_mm ?? 3} onchange={(e) => setFab((f) => (f.kerf_mm = num(e)))} />
-      <span class="unit">mm</span>
+      <input
+        type="number"
+        step="any"
+        min="0"
+        value={toShown(fab?.kerf_mm ?? 3)}
+        onchange={(e) => setFab((f) => (f.kerf_mm = len(e)))}
+      />
+      <span class="unit">{lengthUnit()}</span>
     </label>
     <label class="row">
       <span class="label">Stock bend within</span>

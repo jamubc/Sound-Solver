@@ -1,6 +1,6 @@
 <script lang="ts">
   import { backend } from './backend';
-  import { JOINT, mm } from './format';
+  import { fromShown, JOINT, lengthUnit, mm, od, shown, toShown } from './format';
   import { app, commit, edit, editFabrication, manifestOf } from './state.svelte';
   import Tune from './Tune.svelte';
   import type { Element, Joint, Project, Route } from './types/project';
@@ -30,6 +30,8 @@
       (findElement(p, id) as unknown as Record<string, unknown>)[key] = value;
     });
   const num = (e: Event) => Number((e.currentTarget as HTMLInputElement).value);
+  /** A length entered in the unit lengths show in, in millimetres. */
+  const len = (e: Event) => fromShown(num(e));
 
   function stockOf(r: Route, i: number): number | null {
     const radius = r.bend_radius_mm?.[i] ?? 1.5 * r.pipe.od_mm;
@@ -127,18 +129,18 @@
   }
 </script>
 
-{#snippet vec3(label: string, value: Vec3, onchange: (v: Vec3) => void)}
+{#snippet vec3(label: string, value: Vec3, onchange: (v: Vec3) => void, length = true)}
   <div class="row">
     <span class="label">{label}</span>
     {#each value as x, k}
       <input
         type="number"
-        step="1"
-        value={x}
-        onchange={(e) => onchange(value.map((v, j) => (j === k ? num(e) : v)) as Vec3)}
+        step="any"
+        value={length ? toShown(x) : x}
+        onchange={(e) => onchange(value.map((v, j) => (j === k ? (length ? len(e) : num(e)) : v)) as Vec3)}
       />
     {/each}
-    <span class="unit">mm</span>
+    <span class="unit">{length ? lengthUnit() : ''}</span>
   </div>
 {/snippet}
 
@@ -150,22 +152,26 @@
       <p class="basis">Values here are {basis(`system.elements.${element.id}`)}</p>
     {/if}
     {@render vec3('Position', element.position_mm, (v) => setField(element.id, 'position_mm', v))}
-    {@render vec3('Axis', element.axis ?? [-1, 0, 0], (v) => setField(element.id, 'axis', v))}
+    {@render vec3('Axis', element.axis ?? [-1, 0, 0], (v) => setField(element.id, 'axis', v), false)}
     {#each manifest.param ?? [] as p (p.key)}
       {#if p.kind === 'number'}
+        {@const length = p.unit === 'mm'}
+        {@const show = (x: number) => (length ? toShown(x) : x)}
         <label class="row">
           <span class="label">{p.label}</span>
           <input
             type="number"
             step="any"
-            min={p.min}
-            max={p.max}
-            value={field(element, p.key) ?? p.default}
-            onchange={(e) => setField(element.id, p.key, num(e))}
+            min={p.min == null ? undefined : show(p.min)}
+            max={p.max == null ? undefined : show(p.max)}
+            value={show(Number(field(element, p.key) ?? p.default))}
+            onchange={(e) => setField(element.id, p.key, length ? len(e) : num(e))}
           />
-          <span class="unit">{p.unit}</span>
+          <span class="unit">{length ? lengthUnit() : p.unit}</span>
         </label>
-        <div class="range muted">{p.min}–{p.max} {p.unit}</div>
+        {#if p.min != null && p.max != null}
+          <div class="range muted">{show(p.min)}–{show(p.max)} {length ? lengthUnit() : p.unit}</div>
+        {/if}
       {:else if p.kind === 'material'}
         <label class="row">
           <span class="label">{p.label}</span>
@@ -179,8 +185,11 @@
           </select>
         </label>
       {:else if p.kind === 'direction'}
-        {@render vec3(p.label, (field(element, p.key) as Vec3 | undefined) ?? [0, 0, -1], (v) =>
-          setField(element.id, p.key, v),
+        {@render vec3(
+          p.label,
+          (field(element, p.key) as Vec3 | undefined) ?? [0, 0, -1],
+          (v) => setField(element.id, p.key, v),
+          false,
         )}
       {:else}
         <div class="row muted">
@@ -208,24 +217,24 @@
       <span class="label">Outside diameter</span>
       <input
         type="number"
-        step="0.1"
-        min="10"
-        value={route.pipe.od_mm}
-        onchange={(e) => edit((p) => (findRoute(p, route.id).pipe.od_mm = num(e)))}
+        step="any"
+        min={toShown(10)}
+        value={toShown(route.pipe.od_mm)}
+        onchange={(e) => edit((p) => (findRoute(p, route.id).pipe.od_mm = len(e)))}
       />
-      <span class="unit">mm</span>
+      <span class="unit">{lengthUnit()}</span>
     </label>
-    <div class="range muted">{(route.pipe.od_mm / 25.4).toFixed(2)} in</div>
+    <div class="range muted">{od(route.pipe.od_mm)}</div>
     <label class="row">
       <span class="label">Wall</span>
       <input
         type="number"
-        step="0.1"
-        min="0.3"
-        value={route.pipe.wall_mm}
-        onchange={(e) => edit((p) => (findRoute(p, route.id).pipe.wall_mm = num(e)))}
+        step="any"
+        min={toShown(0.3)}
+        value={toShown(route.pipe.wall_mm)}
+        onchange={(e) => edit((p) => (findRoute(p, route.id).pipe.wall_mm = len(e)))}
       />
-      <span class="unit">mm</span>
+      <span class="unit">{lengthUnit()}</span>
     </label>
     <label class="row">
       <span class="label">Material</span>
@@ -263,12 +272,12 @@
           </select>
           <input
             type="number"
-            step="1"
-            min="1"
-            value={route.bend_radius_mm?.[i] ?? 1.5 * route.pipe.od_mm}
-            onchange={(e) => setBend(route.id, i, num(e))}
+            step="any"
+            min={toShown(1)}
+            value={toShown(route.bend_radius_mm?.[i] ?? 1.5 * route.pipe.od_mm)}
+            onchange={(e) => setBend(route.id, i, len(e))}
           />
-          <span class="unit">mm</span>
+          <span class="unit">{lengthUnit()}</span>
           <button title="Remove this via point" onclick={() => removeVia(route.id, i)}>×</button>
         </div>
       </div>
@@ -279,13 +288,20 @@
       <select bind:value={placing} data-testid="place-kind">
         {#each inline as m (m.type)}<option value={m.type}>{m.name}</option>{/each}
       </select>
-      <input type="number" step="1" min="0" bind:value={placeAt} data-testid="place-at" />
-      <span class="unit">mm along</span>
+      <input
+        type="number"
+        step="any"
+        min="0"
+        value={placeAt === null ? '' : toShown(placeAt)}
+        onchange={(e) => (placeAt = len(e))}
+        data-testid="place-at"
+      />
+      <span class="unit">{lengthUnit()} along</span>
       <button onclick={() => place(route.id)}>Place</button>
     </div>
     <div class="range muted">
-      straight runs: {straights.map(([a, b]) => `${a.toFixed(0)}–${b.toFixed(0)}`).join(', ')} mm; click the
-      pipe to pick a spot
+      straight runs: {straights.map(([a, b]) => `${shown(a)}–${shown(b)}`).join(', ')} {lengthUnit()}; click
+      the pipe to pick a spot
     </div>
     {#if failure}<p class="failure">{failure}</p>{/if}
     <h2 class="gap">Hangers</h2>
@@ -294,17 +310,17 @@
         <span class="label">#{i + 1}</span>
         <input
           type="number"
-          step="1"
+          step="any"
           min="0"
-          value={h}
-          onchange={(e) => setHangers(route.id, (hs) => (hs[i] = num(e)))}
+          value={toShown(h)}
+          onchange={(e) => setHangers(route.id, (hs) => (hs[i] = len(e)))}
         />
-        <span class="unit">mm along</span>
+        <span class="unit">{lengthUnit()} along</span>
         <button title="Remove this hanger" onclick={() => setHangers(route.id, (hs) => hs.splice(i, 1))}>×</button>
       </div>
     {/each}
     <button onclick={() => setHangers(route.id, (hs) => hs.push(placeAt ?? 0))}>
-      Add hanger at {placeAt ?? 0} mm
+      Add hanger at {mm(placeAt ?? 0, 0)}
     </button>
     <h2 class="gap">Joints</h2>
     {#each [['start_joint', route.from.element], ['end_joint', route.to.element]] as const as [end, at]}

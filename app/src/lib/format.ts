@@ -1,15 +1,35 @@
-// Display formatting. Lengths are millimetres throughout; pipe diameters also in inches.
+// Display formatting. The project holds lengths in millimetres; they show in millimetres or
+// inches (`app.inches`), pipe diameters always in both.
+import { app } from './state.svelte';
 
-export const mm = (x: number, digits = 1) => `${x.toFixed(digits)} mm`;
+const MM_PER_IN = 25.4;
+
+/** The unit lengths show in. */
+export const lengthUnit = () => (app.inches ? 'in' : 'mm');
+
+/** A length held in millimetres, in the unit it shows in (inches with one more decimal). */
+export const mm = (x: number, digits = 1) =>
+  app.inches ? `${(x / MM_PER_IN).toFixed(digits + 1)} in` : `${x.toFixed(digits)} mm`;
+
+/** A length held in millimetres as an input shows it; `fromShown` takes it back. */
+export const toShown = (x: number) => (app.inches ? +(x / MM_PER_IN).toFixed(3) : x);
+export const fromShown = (x: number) => (app.inches ? x * MM_PER_IN : x);
 
 /** Pipe outside diameter, always in both units. */
-export const od = (x: number) => `${x.toFixed(1)} mm (${(x / 25.4).toFixed(2)} in)`;
+export const od = (x: number) =>
+  app.inches
+    ? `${(x / MM_PER_IN).toFixed(2)} in (${x.toFixed(1)} mm)`
+    : `${x.toFixed(1)} mm (${(x / MM_PER_IN).toFixed(2)} in)`;
 
 export const db = (x: number) => `${x.toFixed(1)} dB`;
 
 export const rpm = (x: number) => `${Math.round(x)} rpm`;
 
-export const vec = (v: readonly number[]) => v.map((x) => x.toFixed(0)).join(', ');
+/** A length held in millimetres as a bare number in the unit it shows in, to 1 mm or 0.1 in. */
+export const shown = (x: number) => (app.inches ? (x / MM_PER_IN).toFixed(1) : x.toFixed(0));
+
+/** A point held in millimetres, in the unit lengths show in. */
+export const vec = (v: readonly number[]) => v.map(shown).join(', ');
 
 export const JOINT: Record<string, string> = { butt: 'butt weld', slip: 'slip joint', v_band: 'V-band', flange: 'flange' };
 

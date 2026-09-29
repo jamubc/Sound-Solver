@@ -1,6 +1,6 @@
 <script lang="ts">
   import { backend } from './backend';
-  import { rpm as rpmText } from './format';
+  import { lengthUnit, rpm as rpmText, shown as shownLength } from './format';
   import { app, edit, manifestOf } from './state.svelte';
   import type { Tuning } from './types/api';
   import type { Element, Project } from './types/project';
@@ -34,8 +34,8 @@
   });
 
   const volume = $derived(result?.parameter === 'volume_l');
-  const unit = $derived(volume ? 'L' : 'mm');
-  const shown = (x: number) => (volume ? x.toFixed(2) : x.toFixed(0));
+  const unit = $derived(volume ? 'L' : lengthUnit());
+  const shown = (x: number) => (volume ? x.toFixed(2) : shownLength(x));
   const label = $derived(
     manifestOf(element.type)?.param?.find((p) => p.key === result?.parameter)?.label ?? result?.parameter,
   );
@@ -54,8 +54,9 @@
     }
   }
 
+  /** The tuned value as stored: to 0.01 L, or to the millimetre. */
   function apply(tuned: Tuning) {
-    const value = Number(shown(tuned.value));
+    const value = volume ? Number(tuned.value.toFixed(2)) : Math.round(tuned.value);
     edit((p) => {
       const e = p.system.elements.find((x) => x.id === element.id);
       if (e) (e as unknown as Record<string, number>)[tuned.parameter] = value;
