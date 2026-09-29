@@ -19,6 +19,7 @@ pub mod model;
 pub mod preview;
 pub mod project;
 pub mod radiation;
+pub mod render;
 pub mod scan;
 pub mod solid;
 pub mod solve;

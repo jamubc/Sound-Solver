@@ -8,6 +8,7 @@ pub mod duct;
 pub mod grid;
 pub mod outlet;
 pub mod perforate;
+pub mod render;
 pub mod sod;
 pub mod steady;
 
@@ -89,5 +90,6 @@ pub fn cases() -> Vec<Case> {
         ("crosscheck", crosscheck::run),
         ("perforate", perforate::run),
         ("steady", steady::run),
+        ("render", render::run),
     ]
 }

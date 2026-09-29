@@ -19,7 +19,8 @@ use std::f64::consts::PI;
 
 use rustfft::num_complex::Complex64;
 
-use crate::math::{bessel_i1_scaled, bessel_j1, bessel_k1_scaled, bessel_y1, integrate};
+use crate::geometry::{Vec3, norm, sub};
+use crate::math::{Trace, bessel_i1_scaled, bessel_j1, bessel_k1_scaled, bessel_y1, integrate};
 
 /// Magnitude of the Levine–Schwinger reflection coefficient, unflanged pipe, `0 < ka < 3.83`.
 pub fn ls_reflection_magnitude(ka: f64) -> f64 {
@@ -169,6 +170,91 @@ pub fn monopole_pressure(
     p
 }
 
+/// Straight-line motion of the vehicle along its own +x axis through air at rest: the vehicle
+/// frame sits at `x0 + ∫₀ᵗ v` in the listener's frame, m.
+#[derive(Clone, Debug)]
+pub struct Motion {
+    pub x0: f64,
+    /// Vehicle speed against time, m/s.
+    pub speed: Trace,
+}
+
+impl Motion {
+    pub fn at_rest() -> Self {
+        Self {
+            x0: 0.0,
+            speed: Trace::constant(0.0),
+        }
+    }
+}
+
+/// Pressure at `listener`, Pa, sampled at `fs` from `t = 0`, from point monopoles at
+/// `sources[i]` (vehicle frame, m) moving with `motion`, each with its image in the rigid
+/// ground `z = ground_z`, whose volume velocities `q[i]` (m³/s) are sampled at `fs` from
+/// `t = t_q0`; ambient `ρ₀`, `c₀`. The subsonic moving-monopole solution in retarded time τ,
+/// `t = τ + R(τ)/c₀` (Dowling & Ffowcs Williams 1983, ch. 9):
+/// ```text
+/// φ(t) = −Σ Q(τ) / (4π R (1 − M_R)),   p = −ρ₀ ∂φ/∂t,   M_R = v(τ)·(x − y(τ)) / (c₀ R)
+/// ```
+/// which carries the Doppler shift and convective amplification, and at rest is the time form
+/// of [`monopole_pressure`], `p = ρ₀ Q̇(t − r/c₀) / (4π r)`. `Q(τ)` is linear between samples
+/// and zero before `t_q0`; `∂/∂t` is a central difference.
+#[allow(clippy::too_many_arguments)]
+pub fn listener_pressure(
+    fs: f64,
+    samples: usize,
+    rho0: f64,
+    c0: f64,
+    sources: &[Vec3],
+    q: &[Vec<f64>],
+    t_q0: f64,
+    motion: &Motion,
+    listener: Vec3,
+    ground_z: f64,
+) -> Vec<f64> {
+    let q_at = |qi: &[f64], tau: f64| {
+        let x = (tau - t_q0) * fs;
+        if x < 0.0 {
+            return 0.0;
+        }
+        let (k, f) = (x as usize, x.fract());
+        match (qi.get(k), qi.get(k + 1)) {
+            (Some(a), Some(b)) => a + (b - a) * f,
+            _ => qi[qi.len() - 1],
+        }
+    };
+    // φ at t = (j − 1)/fs, j = 0 … samples + 1, for the central difference.
+    let mut phi = vec![0.0; samples + 2];
+    for (s, qi) in sources.iter().zip(q) {
+        for z in [s[2], 2.0 * ground_z - s[2]] {
+            let at = |tau: f64| {
+                let y = [s[0] + motion.x0 + motion.speed.integral(tau), s[1], z];
+                let d = sub(listener, y);
+                let r = norm(d);
+                (r, motion.speed.at(tau) * d[0] / (c0 * r))
+            };
+            let mut tau = -at(-1.0 / fs).0 / c0 - 1.0 / fs;
+            for (j, out) in phi.iter_mut().enumerate() {
+                let t = (j as f64 - 1.0) / fs;
+                // Newton on g(τ) = τ + R(τ)/c₀ − t; g' = 1 − M_R > 0 below Mach 1.
+                let (mut r, mut m_r) = at(tau);
+                for _ in 0..20 {
+                    let g = tau + r / c0 - t;
+                    if g.abs() < 1e-12 {
+                        break;
+                    }
+                    tau -= g / (1.0 - m_r);
+                    (r, m_r) = at(tau);
+                }
+                *out -= q_at(qi, tau) / (4.0 * PI * r * (1.0 - m_r));
+            }
+        }
+    }
+    (1..=samples)
+        .map(|j| -rho0 * (phi[j + 1] - phi[j - 1]) * 0.5 * fs)
+        .collect()
+}
+
 /// A-weighting in dB (IEC 61672-1:2013, Annex E).
 pub fn a_weighting_db(f: f64) -> f64 {
     let f2 = f * f;
@@ -272,5 +358,85 @@ mod tests {
         assert!(a_weighting_db(1000.0).abs() < 0.01);
         assert!((a_weighting_db(100.0) + 19.1).abs() < 0.1);
         assert!((a_weighting_db(50.0) + 30.2).abs() < 0.1);
+    }
+
+    /// Fourier coefficient of `p[a..b]` at `omega`, as the complex amplitude of `e^{jωt}`.
+    fn amplitude(p: &[f64], fs: f64, omega: f64, a: usize, b: usize) -> Complex64 {
+        (a..b).fold(Complex64::new(0.0, 0.0), |s, i| {
+            s + p[i] * Complex64::from_polar(2.0 / (b - a) as f64, -omega * i as f64 / fs)
+        })
+    }
+
+    /// A sinusoidal outlet flow at rest radiates the frequency-domain receiver pressure, level
+    /// and phase.
+    #[test]
+    fn at_rest_matches_frequency_domain() {
+        let (fs, f, rho0, c0) = (48_000.0, 500.0, 1.2, 343.0);
+        let (src, rec, ground) = ([0.0, 0.0, 0.3], [0.5, 0.2, 0.3], -0.35);
+        let w = 2.0 * PI * f;
+        let q: Vec<f64> = (0..9600)
+            .map(|i| 1e-3 * (w * i as f64 / fs).cos())
+            .collect();
+        let p = listener_pressure(
+            fs,
+            9600,
+            rho0,
+            c0,
+            &[src],
+            &[q],
+            0.0,
+            &Motion::at_rest(),
+            rec,
+            ground,
+        );
+        // Whole periods after every arrival.
+        let measured = amplitude(&p, fs, w, 4800, 9600);
+        let q = [Complex64::new(1e-3, 0.0)];
+        let expected = monopole_pressure(w, rho0, c0, &[src], &q, rec, ground);
+        assert!(
+            (measured / expected - 1.0).norm() < 0.01,
+            "{measured} vs {expected}"
+        );
+    }
+
+    /// A source driving straight at a distant listener at Mach 0.058 is heard at
+    /// `f/(1 − M)` with the level `ρ₀ ω Q / (4π R_e (1 − M)²)` of its emission distance `R_e`.
+    #[test]
+    fn approaching_source_is_doppler_shifted() {
+        let (fs, f, rho0, c0, v) = (48_000.0, 500.0, 1.2, 343.0, 20.0);
+        let w = 2.0 * PI * f;
+        let n = 48_000;
+        let q: Vec<f64> = (0..n).map(|i| 1e-3 * (w * i as f64 / fs).cos()).collect();
+        let motion = Motion {
+            x0: 0.0,
+            speed: Trace::constant(v),
+        };
+        let listener = [200.0, 0.0, 0.0];
+        let p = listener_pressure(
+            fs,
+            n,
+            rho0,
+            c0,
+            &[[0.0; 3]],
+            &[q],
+            0.0,
+            &motion,
+            listener,
+            -1e4,
+        );
+        let m = v / c0;
+        let heard = w / (1.0 - m);
+        // A 0.1 s window heard from 0.8 s: emitted around τ = (t − 200/c₀)/(1 − M).
+        let (a, b) = (38_400, 43_200);
+        let t_mid = 0.85;
+        let r_e = 200.0 - v * (t_mid - 200.0 / c0) / (1.0 - m);
+        let level = rho0 * w * 1e-3 / (4.0 * PI * r_e * (1.0 - m).powi(2));
+        let at_heard = amplitude(&p, fs, heard, a, b).norm();
+        let at_emitted = amplitude(&p, fs, w, a, b).norm();
+        assert!(
+            (at_heard / level - 1.0).abs() < 0.02,
+            "{at_heard} vs {level}"
+        );
+        assert!(at_emitted < 0.05 * level, "{at_emitted}");
     }
 }

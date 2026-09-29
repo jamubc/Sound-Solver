@@ -9,6 +9,7 @@ use exhaust_core::audio;
 use exhaust_core::layout::layout;
 use exhaust_core::measure::{self, OrderTracks, Recording, RpmLog};
 use exhaust_core::project::{CabinTf, CabinTfMethod, Project, RecordingRef, sweep_points};
+use exhaust_core::render::{RenderProgress, Scene, render};
 use exhaust_core::scan::{self, Mesh};
 use exhaust_core::solve::{Line, PointOutcome, SolverKind, sweep};
 use exhaust_core::tune::tune;
@@ -154,6 +155,21 @@ enum Command {
         /// WAV file to write (16-bit, peak at 0.9 of full scale).
         #[arg(long, short)]
         out: PathBuf,
+    },
+    /// Render a scene by marching the time-domain solver: a WAV of every listener channel
+    /// (16-bit, peak at 0.9 of full scale) and the render's provenance as JSON.
+    Render {
+        /// Project file (JSON).
+        project: PathBuf,
+        /// Scene file (JSON): engine speed and intake pressure against time, and the listener.
+        #[arg(long)]
+        scene: PathBuf,
+        /// WAV file to write.
+        #[arg(long, short)]
+        out: PathBuf,
+        /// Write the provenance here instead of standard output.
+        #[arg(long)]
+        info: Option<PathBuf>,
     },
     /// Run the analytic validation suite; exits non-zero if any check fails.
     Validate {
@@ -411,7 +427,7 @@ fn run(cli: Cli) -> Result<ExitCode, String> {
             };
             let sound =
                 audio::synthesize(&solved, lo, hi, seconds, &gain).map_err(|e| e.to_string())?;
-            write_wav(&out, &sound)?;
+            write_wav(&out, sound.sample_rate, &[&sound.samples], sound.peak_pa)?;
             let square: f64 = sound.samples.iter().map(|&s| (s as f64).powi(2)).sum();
             let level = |pa: f64| 20.0 * (pa / 20e-6).log10();
             eprintln!(
@@ -429,6 +445,44 @@ fn run(cli: Cli) -> Result<ExitCode, String> {
                     String::new()
                 }
             );
+            Ok(ExitCode::SUCCESS)
+        }
+        Command::Render {
+            project,
+            scene,
+            out,
+            info,
+        } => {
+            let project = read_project(&project)?;
+            let text =
+                std::fs::read_to_string(&scene).map_err(|e| format!("{}: {e}", scene.display()))?;
+            let scene: Scene =
+                serde_json::from_str(&text).map_err(|e| format!("{}: {e}", scene.display()))?;
+            let mut last = String::new();
+            let r = render(&project, &scene, &mut |p| {
+                let line = match p {
+                    RenderProgress::Settle { cycle, .. } => format!("settling: cycle {cycle}"),
+                    RenderProgress::March { fraction } => {
+                        format!("marching: {:.0} %", 100.0 * fraction)
+                    }
+                };
+                if line != last {
+                    eprintln!("{line}");
+                    last = line;
+                }
+                true
+            })
+            .map_err(|e| e.to_string())?;
+            let channels: Vec<&[f32]> = r.channels.iter().map(Vec::as_slice).collect();
+            write_wav(&out, r.info.sample_rate, &channels, r.info.peak_pa)?;
+            emit(
+                &serde_json::json!({
+                    "wav": out,
+                    "full_scale_pa": r.info.peak_pa / 0.9,
+                    "render": r.info,
+                }),
+                info,
+            )?;
             Ok(ExitCode::SUCCESS)
         }
         Command::Validate { json, cases: only } => {
@@ -514,25 +568,31 @@ fn read_scan(project_path: &Path, project: &Project) -> Result<Option<Mesh>, Str
         .map_err(|e| format!("{}: {e}", file.display()))
 }
 
-/// 16-bit mono WAV of `sound`, its peak at 0.9 of full scale; the sample rate rounded to 1 Hz.
-fn write_wav(path: &Path, sound: &audio::Sound) -> Result<(), String> {
-    let scale = if sound.peak_pa > 0.0 {
-        0.9 / sound.peak_pa
-    } else {
-        0.0
-    };
-    let (rate, n) = (sound.sample_rate.round() as u32, sound.samples.len() as u32);
+/// 16-bit WAV of equal-length `channels` of pressure, Pa, interleaved, `peak_pa` at 0.9 of full
+/// scale; the sample rate rounded to 1 Hz.
+fn write_wav(
+    path: &Path,
+    sample_rate: f64,
+    channels: &[&[f32]],
+    peak_pa: f64,
+) -> Result<(), String> {
+    let scale = if peak_pa > 0.0 { 0.9 / peak_pa } else { 0.0 };
+    let (rate, nc) = (sample_rate.round() as u32, channels.len() as u32);
+    let n = channels.first().map_or(0, |c| c.len()) as u32;
+    let bytes = 2 * nc * n;
     let mut b = b"RIFF".to_vec();
-    b.extend((36 + 2 * n).to_le_bytes());
+    b.extend((36 + bytes).to_le_bytes());
     b.extend(b"WAVEfmt ");
     b.extend(16u32.to_le_bytes());
-    b.extend([1u16, 1].iter().flat_map(|x| x.to_le_bytes()));
-    b.extend([rate, 2 * rate].iter().flat_map(|x| x.to_le_bytes()));
-    b.extend([2u16, 16].iter().flat_map(|x| x.to_le_bytes()));
+    b.extend([1u16, nc as u16].iter().flat_map(|x| x.to_le_bytes()));
+    b.extend([rate, 2 * nc * rate].iter().flat_map(|x| x.to_le_bytes()));
+    b.extend([2 * nc as u16, 16].iter().flat_map(|x| x.to_le_bytes()));
     b.extend(b"data");
-    b.extend((2 * n).to_le_bytes());
-    for &s in &sound.samples {
-        b.extend(((s as f64 * scale * 32767.0).round() as i16).to_le_bytes());
+    b.extend(bytes.to_le_bytes());
+    for i in 0..n as usize {
+        for c in channels {
+            b.extend(((c[i] as f64 * scale * 32767.0).round() as i16).to_le_bytes());
+        }
     }
     std::fs::write(path, b).map_err(|e| format!("{}: {e}", path.display()))
 }

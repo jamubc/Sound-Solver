@@ -88,6 +88,11 @@ pub struct Duct {
     pub volume: Vec<f64>,
     /// Hydraulic diameter at cell centres, m.
     pub diameter: Vec<f64>,
+    /// Largest transverse dimension of the cross-section, m: the first non-planar mode of a
+    /// circular section cuts on at `1.8412 c √(1 − M²) / (π D)`, above which the plane-wave
+    /// model no longer holds. The largest face diameter unless the element sets it (the shell
+    /// round an annulus, the channel width of a monolith).
+    pub section_diameter: f64,
     /// Wall temperature per cell, K; `None` is an adiabatic wall.
     pub t_wall: Option<Vec<f64>>,
     /// Absolute wall roughness, m; used only when `friction` is on.
@@ -208,6 +213,7 @@ impl Duct {
         Self {
             label: label.into(),
             dx,
+            section_diameter: d_face.iter().copied().fold(0.0, f64::max),
             area_face,
             volume,
             diameter,

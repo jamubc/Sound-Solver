@@ -184,6 +184,7 @@ fn chamber(el: &Element, c: &ExpansionChamber, b: &mut Builder) -> Result<()> {
                 (dc * dc - od * od).sqrt(),
             );
             annulus.diameter.iter_mut().for_each(|h| *h = dc - od);
+            annulus.section_diameter = dc;
             let ann = b.duct(annulus);
             b.join(
                 port,
@@ -309,6 +310,7 @@ fn catalyst(el: &Element, c: &Catalyst, b: &mut Builder) {
         d_open,
     );
     brick.diameter.iter_mut().for_each(|h| *h = w);
+    brick.section_diameter = w;
     brick.channel = Some(SQUARE_CHANNEL_FRE);
     brick.k_loss[0] += SQUARE_CHANNEL_K_INF;
     let brick = b.duct(brick);
@@ -338,6 +340,8 @@ fn absorptive(el: &Element, a: &Absorptive, b: &mut Builder) {
     let gas_area = fill.map_or(1.0, |f| f.porosity) * (circle(dc) - circle(d_o));
     let inner_idx = b.ducts.len();
     let mut inner = b.straight(format!("{} (perforated tube)", el.id), l, d);
+    // The perforate couples tube and annulus: transverse modes span the case.
+    inner.section_diameter = dc;
     inner.perforate = Some(Perforate {
         partner: inner_idx + 1,
         porosity: a.open_area_ratio,
@@ -351,6 +355,7 @@ fn absorptive(el: &Element, a: &Absorptive, b: &mut Builder) {
         (4.0 * gas_area / PI).sqrt(),
     );
     outer.diameter.iter_mut().for_each(|h| *h = dc - d_o);
+    outer.section_diameter = dc;
     outer.porous = fill;
     let pipe = b.pipe(el, "in").clone();
     outer.wall = b.pipe_wall(
