@@ -925,9 +925,31 @@
               "type": "null"
             }
           ]
+        },
+        "recordings": {
+          "description": "Recordings of the car to set against the prediction.",
+          "type": "array",
+          "items": {
+            "$ref": "#/$defs/RecordingRef"
+          }
         }
       },
       "additionalProperties": false
+    },
+    "MicPosition": {
+      "description": "Where the microphone was.",
+      "oneOf": [
+        {
+          "description": "At the project's receiver.",
+          "type": "string",
+          "const": "exterior"
+        },
+        {
+          "description": "At the driver's ear.",
+          "type": "string",
+          "const": "interior"
+        }
+      ]
     },
     "Operating": {
       "type": "object",
@@ -1079,6 +1101,45 @@
       "required": [
         "distance_m",
         "angle_deg"
+      ]
+    },
+    "RecordingRef": {
+      "description": "A recording of the car (WAV or CAF) and the engine-speed log taken with it.",
+      "type": "object",
+      "properties": {
+        "calibration_db": {
+          "description": "Sound pressure level of a full-scale sine, dB re 20 µPa; without it levels are dB re\nfull scale.",
+          "type": [
+            "number",
+            "null"
+          ],
+          "format": "double"
+        },
+        "log_offset_s": {
+          "description": "Time on the log (from its first row) at the start of the recording, s.",
+          "type": "number",
+          "format": "double",
+          "default": 0.0
+        },
+        "path": {
+          "description": "Relative to the project file, or absolute.",
+          "type": "string"
+        },
+        "position": {
+          "$ref": "#/$defs/MicPosition"
+        },
+        "rpm_log": {
+          "description": "CSV of engine speed against time from an OBD logger, as `path`; without one the\nengine speed is estimated from the recording and flagged.",
+          "type": [
+            "string",
+            "null"
+          ]
+        }
+      },
+      "additionalProperties": false,
+      "required": [
+        "path",
+        "position"
       ]
     },
     "Route": {

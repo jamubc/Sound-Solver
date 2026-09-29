@@ -12,6 +12,7 @@ pub mod geometry;
 pub mod layout;
 pub mod manifest;
 pub mod math;
+pub mod measure;
 pub mod metrics;
 pub mod model;
 pub mod preview;

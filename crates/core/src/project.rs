@@ -53,12 +53,45 @@ pub struct Measurements {
     /// Without it the interior drone is unavailable: the cabin is never synthesised.
     #[serde(default, skip_serializing_if = "Option::is_none")]
     pub cabin_tf: Option<CabinTf>,
+    /// Recordings of the car to set against the prediction.
+    #[serde(default, skip_serializing_if = "Vec::is_empty")]
+    pub recordings: Vec<RecordingRef>,
 }
 
 impl Measurements {
     pub fn is_empty(&self) -> bool {
-        self.cabin_tf.is_none()
+        self.cabin_tf.is_none() && self.recordings.is_empty()
     }
+}
+
+/// A recording of the car (WAV or CAF) and the engine-speed log taken with it.
+#[derive(Clone, Debug, PartialEq, Serialize, Deserialize, JsonSchema)]
+#[serde(deny_unknown_fields)]
+pub struct RecordingRef {
+    /// Relative to the project file, or absolute.
+    pub path: String,
+    pub position: MicPosition,
+    /// CSV of engine speed against time from an OBD logger, as `path`; without one the
+    /// engine speed is estimated from the recording and flagged.
+    #[serde(default, skip_serializing_if = "Option::is_none")]
+    pub rpm_log: Option<String>,
+    /// Time on the log (from its first row) at the start of the recording, s.
+    #[serde(default)]
+    pub log_offset_s: f64,
+    /// Sound pressure level of a full-scale sine, dB re 20 µPa; without it levels are dB re
+    /// full scale.
+    #[serde(default, skip_serializing_if = "Option::is_none")]
+    pub calibration_db: Option<f64>,
+}
+
+/// Where the microphone was.
+#[derive(Clone, Copy, Debug, PartialEq, Eq, Serialize, Deserialize, JsonSchema)]
+#[serde(rename_all = "snake_case")]
+pub enum MicPosition {
+    /// At the project's receiver.
+    Exterior,
+    /// At the driver's ear.
+    Interior,
 }
 
 /// Cabin transfer function: level at the driver's ear minus level at the exterior receiver.
@@ -704,11 +737,13 @@ impl Project {
         serde_json::to_string_pretty(self).expect("project serialises")
     }
 
-    /// BLAKE3 hash of the canonical JSON without the fabrication-only data (stock, scan,
-    /// hangers, joints) no result depends on; keys result caches and provenance.
+    /// BLAKE3 hash of the canonical JSON without the data no solved point depends on
+    /// (fabrication: stock, scan, hangers, joints; measurements); keys result caches and
+    /// provenance.
     pub fn hash(&self) -> String {
         let mut solved = self.clone();
         solved.fabrication = Fabrication::default();
+        solved.measurements = Measurements::default();
         for r in &mut solved.system.routes {
             (r.hangers_mm, r.start_joint, r.end_joint) = (Vec::new(), None, None);
         }

@@ -18,6 +18,13 @@ export type MaterialFamily = "ferritic_stainless" | "austenitic_stainless" | "ti
  */
 export type CabinTfMethod = "order_ratio" | "impulse";
 /**
+ * Where the microphone was.
+ *
+ * This interface was referenced by `Project`'s JSON-Schema
+ * via the `definition` "MicPosition".
+ */
+export type MicPosition = "exterior" | "interior";
+/**
  * TVD slope limiter for MUSCL reconstruction of primitive variables.
  *
  * This interface was referenced by `Project`'s JSON-Schema
@@ -430,6 +437,10 @@ export interface Measurements {
    * Without it the interior drone is unavailable: the cabin is never synthesised.
    */
   cabin_tf?: CabinTf | null;
+  /**
+   * Recordings of the car to set against the prediction.
+   */
+  recordings?: RecordingRef[];
 }
 /**
  * Cabin transfer function: level at the driver's ear minus level at the exterior receiver.
@@ -448,6 +459,33 @@ export interface CabinTf {
    * Where and when it was measured.
    */
   source: string;
+}
+/**
+ * A recording of the car (WAV or CAF) and the engine-speed log taken with it.
+ *
+ * This interface was referenced by `Project`'s JSON-Schema
+ * via the `definition` "RecordingRef".
+ */
+export interface RecordingRef {
+  /**
+   * Sound pressure level of a full-scale sine, dB re 20 µPa; without it levels are dB re
+   * full scale.
+   */
+  calibration_db?: number | null;
+  /**
+   * Time on the log (from its first row) at the start of the recording, s.
+   */
+  log_offset_s?: number;
+  /**
+   * Relative to the project file, or absolute.
+   */
+  path: string;
+  position: MicPosition;
+  /**
+   * CSV of engine speed against time from an OBD logger, as `path`; without one the
+   * engine speed is estimated from the recording and flagged.
+   */
+  rpm_log?: string | null;
 }
 /**
  * This interface was referenced by `Project`'s JSON-Schema

@@ -121,8 +121,68 @@ pub fn evaluate(project: &Project, points: &[PointOutcome]) -> Metrics {
     }
 }
 
+/// An engine order of two solved configurations, `b − a`.
+#[derive(Clone, Debug, PartialEq, Serialize, JsonSchema)]
+pub struct OrderDifference {
+    pub order: u32,
+    /// Mean level difference over the cruise band, at speeds both solved, dB.
+    pub cruise_db: Option<f64>,
+    /// The largest difference either way over the sweep, `[rpm, dB]`.
+    pub largest: Option<[f64; 2]>,
+    /// Highest level over the sweep, of `a` and of `b`, dB.
+    pub peak_db: [Option<f64>; 2],
+}
+
+/// Engine orders 1–8 of configuration `b` against `a`, the cruise band `project`'s.
+pub fn compare(project: &Project, a: &[PointOutcome], b: &[PointOutcome]) -> Vec<OrderDifference> {
+    let band = project.operating.cruise_band_rpm;
+    let solved = |points: &[PointOutcome]| -> Vec<PointResult> {
+        points
+            .iter()
+            .filter_map(|p| match p {
+                PointOutcome::Solved(r) => Some(r.as_ref().clone()),
+                PointOutcome::Failed { .. } => None,
+            })
+            .collect()
+    };
+    let (a, b) = (solved(a), solved(b));
+    let level = |r: &PointResult, k: u32| r.orders.iter().find(|o| o.0 == k).map(|o| o.2);
+    (1..=8)
+        .map(|k| {
+            let diffs: Vec<(f64, f64)> = a
+                .iter()
+                .filter_map(|ra| {
+                    let rb = b.iter().find(|rb| rb.rpm == ra.rpm)?;
+                    Some((ra.rpm, level(rb, k)? - level(ra, k)?))
+                })
+                .collect();
+            let cruise: Vec<f64> = diffs
+                .iter()
+                .filter(|d| d.0 >= band[0] && d.0 <= band[1])
+                .map(|d| d.1)
+                .collect();
+            let peak = |points: &[PointResult]| {
+                points
+                    .iter()
+                    .filter_map(|r| level(r, k))
+                    .max_by(f64::total_cmp)
+            };
+            OrderDifference {
+                order: k,
+                cruise_db: (!cruise.is_empty())
+                    .then(|| cruise.iter().sum::<f64>() / cruise.len() as f64),
+                largest: diffs
+                    .iter()
+                    .max_by(|x, y| x.1.abs().total_cmp(&y.1.abs()))
+                    .map(|d| [d.0, d.1]),
+                peak_db: [peak(&a), peak(&b)],
+            }
+        })
+        .collect()
+}
+
 /// Drone report of a track, `(rpm, level, converged)` in increasing speed.
-fn drone(track: &[(f64, f64, bool)], band: [f64; 2]) -> Option<DroneReport> {
+pub(crate) fn drone(track: &[(f64, f64, bool)], band: [f64; 2]) -> Option<DroneReport> {
     let pts: Vec<[f64; 2]> = track.iter().map(|&(rpm, level, _)| [rpm, level]).collect();
     let k = (0..pts.len()).max_by(|&a, &b| pts[a][1].total_cmp(&pts[b][1]))?;
     let [mut peak_rpm, mut peak_db] = pts[k];

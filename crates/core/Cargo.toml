@@ -7,12 +7,14 @@ publish.workspace = true
 
 [dependencies]
 blake3 = "1.8.7"
+hound = "3.5.1"
 nalgebra = "0.35.0"
 rayon = "1.12.0"
 rustfft = "6.4.1"
 schemars = "1.2.2"
 serde = { version = "1.0.229", features = ["derive"] }
 serde_json = "1.0.151"
+symphonia = { version = "0.6.1", default-features = false, features = ["caf", "pcm", "alac", "aac"] }
 thiserror = "2.0.21"
 toml = "1.1.6"
 truck-modeling = "0.6"

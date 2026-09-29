@@ -6,12 +6,13 @@ use std::process::ExitCode;
 
 use clap::{Parser, Subcommand, ValueEnum};
 use exhaust_core::layout::layout;
-use exhaust_core::project::{Project, sweep_points};
+use exhaust_core::measure::{self, OrderTracks, Recording, RpmLog};
+use exhaust_core::project::{CabinTf, CabinTfMethod, Project, RecordingRef, sweep_points};
 use exhaust_core::scan::{self, Mesh};
-use exhaust_core::solve::{SolverKind, sweep};
+use exhaust_core::solve::{PointOutcome, SolverKind, sweep};
 use exhaust_core::tune::tune;
 use exhaust_core::validation::{PENDING, cases};
-use exhaust_core::{fabricate, manifest, solid};
+use exhaust_core::{fabricate, manifest, metrics, solid};
 
 #[derive(Clone, Copy, ValueEnum)]
 enum Solver {
@@ -99,6 +100,34 @@ enum Command {
         /// model's.
         #[arg(long)]
         branch_temperature: Option<String>,
+    },
+    /// Engine-order tracks of one of the project's recordings (JSON).
+    Tracks {
+        /// Project file (JSON).
+        project: PathBuf,
+        /// Index into `measurements.recordings`.
+        #[arg(long, default_value_t = 0)]
+        recording: usize,
+    },
+    /// Measure the cabin transfer function; prints it as `measurements.cabin_tf` (JSON).
+    CabinTf {
+        /// Project file (JSON).
+        project: PathBuf,
+        /// Order ratio: exterior and interior recordings of the same drive, as indices into
+        /// `measurements.recordings`.
+        #[arg(long, num_args = 2, value_names = ["EXTERIOR", "INTERIOR"])]
+        orders: Option<Vec<usize>>,
+        /// Impulse: recordings (WAV or CAF) of the same impulses at the exterior receiver and
+        /// at the driver's ear.
+        #[arg(long, num_args = 2, value_names = ["EXTERIOR", "INTERIOR"], conflicts_with = "orders")]
+        impulse: Option<Vec<PathBuf>>,
+    },
+    /// Engine orders of two solved sweeps (`solve` output), the second against the first (JSON).
+    Compare {
+        /// Project file (JSON) whose cruise band applies.
+        project: PathBuf,
+        a: PathBuf,
+        b: PathBuf,
     },
     /// Run the analytic validation suite; exits non-zero if any check fails.
     Validate {
@@ -223,6 +252,88 @@ fn run(cli: Cli) -> Result<ExitCode, String> {
             emit(&tuning, None)?;
             Ok(ExitCode::SUCCESS)
         }
+        Command::Tracks {
+            project: path,
+            recording,
+        } => {
+            let project = read_project(&path)?;
+            let spec = project
+                .measurements
+                .recordings
+                .get(recording)
+                .ok_or_else(|| format!("the project has no recording {recording}"))?;
+            emit(&tracks(&path, &project, spec)?, None)?;
+            Ok(ExitCode::SUCCESS)
+        }
+        Command::CabinTf {
+            project: path,
+            orders,
+            impulse,
+        } => {
+            let project = read_project(&path)?;
+            let tf = match (orders, impulse) {
+                (Some(pair), _) => {
+                    let spec = |i: usize| {
+                        project
+                            .measurements
+                            .recordings
+                            .get(i)
+                            .ok_or_else(|| format!("the project has no recording {i}"))
+                    };
+                    let (ext, int) = (spec(pair[0])?, spec(pair[1])?);
+                    let gain_db = measure::cabin_tf_orders(
+                        &tracks(&path, &project, ext)?,
+                        &tracks(&path, &project, int)?,
+                    )
+                    .map_err(|e| e.to_string())?;
+                    CabinTf {
+                        method: CabinTfMethod::OrderRatio,
+                        source: format!(
+                            "order ratio: {} (exterior), {} (interior)",
+                            ext.path, int.path
+                        ),
+                        gain_db,
+                    }
+                }
+                (None, Some(files)) => {
+                    let rec = |file: &Path| -> Result<Recording, String> {
+                        let bytes =
+                            std::fs::read(file).map_err(|e| format!("{}: {e}", file.display()))?;
+                        Recording::parse(&file.to_string_lossy(), &bytes)
+                            .map_err(|e| format!("{}: {e}", file.display()))
+                    };
+                    CabinTf {
+                        method: CabinTfMethod::Impulse,
+                        source: format!(
+                            "impulse: {} (exterior), {} (interior)",
+                            files[0].display(),
+                            files[1].display()
+                        ),
+                        gain_db: measure::cabin_tf_impulse(&rec(&files[0])?, &rec(&files[1])?)
+                            .map_err(|e| e.to_string())?,
+                    }
+                }
+                (None, None) => return Err("cabin-tf needs --orders or --impulse".into()),
+            };
+            emit(&tf, None)?;
+            Ok(ExitCode::SUCCESS)
+        }
+        Command::Compare { project, a, b } => {
+            let project = read_project(&project)?;
+            let points = |file: &Path| -> Result<Vec<PointOutcome>, String> {
+                let text = std::fs::read_to_string(file)
+                    .map_err(|e| format!("{}: {e}", file.display()))?;
+                let mut sweep: serde_json::Value =
+                    serde_json::from_str(&text).map_err(|e| format!("{}: {e}", file.display()))?;
+                serde_json::from_value(sweep["points"].take())
+                    .map_err(|e| format!("{}: {e}", file.display()))
+            };
+            emit(
+                &metrics::compare(&project, &points(&a)?, &points(&b)?),
+                None,
+            )?;
+            Ok(ExitCode::SUCCESS)
+        }
         Command::Validate { json, cases: only } => {
             let mut all = Vec::new();
             let mut ok = true;
@@ -304,6 +415,36 @@ fn read_scan(project_path: &Path, project: &Project) -> Result<Option<Mesh>, Str
     Mesh::parse(&scan.path, &bytes)
         .map(Some)
         .map_err(|e| format!("{}: {e}", file.display()))
+}
+
+/// Order tracks of a recording, its files relative to the project file.
+fn tracks(
+    project_path: &Path,
+    project: &Project,
+    spec: &RecordingRef,
+) -> Result<OrderTracks, String> {
+    let dir = project_path.parent().unwrap_or(Path::new("."));
+    let read = |name: &str| {
+        let file = dir.join(name);
+        std::fs::read(&file).map_err(|e| format!("{}: {e}", file.display()))
+    };
+    let rec = Recording::parse(&spec.path, &read(&spec.path)?)
+        .map_err(|e| format!("{}: {e}", spec.path))?;
+    let log = match &spec.rpm_log {
+        Some(name) => Some(
+            RpmLog::parse(&String::from_utf8_lossy(&read(name)?))
+                .map_err(|e| format!("{name}: {e}"))?,
+        ),
+        None => None,
+    };
+    measure::order_tracks(
+        project,
+        &rec,
+        log.as_ref(),
+        spec.log_offset_s,
+        spec.calibration_db,
+    )
+    .map_err(|e| e.to_string())
 }
 
 /// The fabrication files, named after the project file.
