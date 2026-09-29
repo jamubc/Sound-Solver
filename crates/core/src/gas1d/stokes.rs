@@ -33,9 +33,16 @@ pub struct HalfDerivative {
 
 impl Default for HalfDerivative {
     fn default() -> Self {
+        Self::band(OMEGA_MIN, OMEGA_MAX)
+    }
+}
+
+impl HalfDerivative {
+    /// Representation accurate for `|s|` from `omega_min` to `omega_max`, rad/s.
+    pub fn band(omega_min: f64, omega_max: f64) -> Self {
         // Tails beyond the ends contribute ≈ (2/π)√(s_min/ω) and (2/π)√(ω/s_max): 12 e-folds of
         // margin keeps each under 0.2 %; the trapezoidal error at step 1.5 is ~e^{−π²/1.5}.
-        let (x0, x1, h) = (OMEGA_MIN.ln() - 12.0, OMEGA_MAX.ln() + 12.0, 1.5);
+        let (x0, x1, h) = (omega_min.ln() - 12.0, omega_max.ln() + 12.0, 1.5);
         let n = ((x1 - x0) / h).ceil() as usize + 1;
         let xs: Vec<f64> = (0..n).map(|k| x0 + h * k as f64).collect();
         Self {
@@ -46,9 +53,7 @@ impl Default for HalfDerivative {
                 .collect(),
         }
     }
-}
 
-impl HalfDerivative {
     /// Number of memory states per input.
     pub fn states(&self) -> usize {
         self.poles.len()

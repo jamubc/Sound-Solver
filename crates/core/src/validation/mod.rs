@@ -7,6 +7,7 @@ pub mod crosscheck;
 pub mod duct;
 pub mod grid;
 pub mod outlet;
+pub mod perforate;
 pub mod sod;
 
 use serde::Serialize;
@@ -54,5 +55,6 @@ pub fn cases() -> Vec<Case> {
         ("helmholtz", acoustic::helmholtz),
         ("tee", acoustic::tee_junction),
         ("crosscheck", crosscheck::run),
+        ("perforate", perforate::run),
     ]
 }

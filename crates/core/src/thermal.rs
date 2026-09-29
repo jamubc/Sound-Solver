@@ -293,9 +293,16 @@ fn march(
             queue.push_back(far);
         }
     }
+    // Annuli of absorptive mufflers: at their perforated tube's gas temperature, cell by cell.
+    for (d, duct) in net.ducts.iter().enumerate() {
+        if let Some(perf) = duct.perforate {
+            t_gas[perf.partner] = t_gas[d].clone();
+            t_wall[perf.partner] = t_gas[d].clone();
+        }
+    }
     // Dead ends: fins rooted at the wall temperature where they meet marched ducts.
     let mut pending: Vec<usize> = (0..net.ducts.len())
-        .filter(|&d| flow[d].is_none())
+        .filter(|&d| flow[d].is_none() && t_gas[d][0].is_nan())
         .collect();
     let mut guard = 0;
     while !pending.is_empty() && guard < 4 * net.ducts.len() + 4 {

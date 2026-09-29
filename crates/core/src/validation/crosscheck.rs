@@ -6,19 +6,21 @@
 //! runs to periodicity; the four-pole solver is linearised about the time-averaged state of
 //! that run. The radiated level at each harmonic up to 1 kHz must agree within 2 dB
 //! (directive: on linear cases disagreement is a bug). Systems: a plain 3 m pipe; the pipe with
-//! an expansion chamber; the pipe with a quarter-wave stub.
+//! an expansion chamber; the pipe with a quarter-wave stub; the pipe with a packed absorptive
+//! muffler (perforated tube with grazing flow, 100 kg/m³ fill).
 
 use std::f64::consts::PI;
 
 use rustfft::num_complex::Complex64;
 
 use super::Check;
+use crate::elements::fill_properties;
 use crate::error::Result;
 use crate::fourpole::{self, CellMean, Drive, MeanState};
 use crate::gas::Gas;
 use crate::gas1d::{
-    Duct, JunctionBc, JunctionKind, Limiter, MassFlowBc, Network, Node, Port, RadiationBc, Signal,
-    Simulation,
+    Duct, JunctionBc, JunctionKind, Limiter, MassFlowBc, Network, Node, Perforate, Port,
+    RadiationBc, Signal, Simulation,
 };
 use crate::spectrum::fft;
 
@@ -63,7 +65,10 @@ fn network(mut ducts: Vec<Duct>, mut nodes: Vec<Node>, outlet: Port) -> (Network
         t_amb: 293.15,
         radius,
     }));
-    ducts.iter_mut().for_each(|d| d.friction = true);
+    // Friction everywhere but in fills, whose model carries the viscous losses.
+    ducts
+        .iter_mut()
+        .for_each(|d| d.friction = d.porous.is_none());
     let net = Network {
         gas: Gas::exhaust(1.87, 1.0).expect("valid composition"),
         ducts,
@@ -209,6 +214,42 @@ pub fn run() -> Result<Vec<Check>> {
         case,
         "quarter-wave stub: max |ΔL| over harmonics, dB",
         compare(&net, s, o, &[1.0, 1.0, 0.0])?,
+        2.0,
+    ));
+
+    let fill = fill_properties(100.0, 12e-6);
+    let (dc, d_o) = (0.16, d + 0.002);
+    let d_ann = (fill.porosity * (dc * dc - d_o * d_o)).sqrt();
+    let mut tube = pipe("perforated tube", 0.4, d);
+    tube.perforate = Some(Perforate {
+        partner: 3,
+        porosity: 0.2,
+        hole_diameter: 3.5e-3,
+        thickness: 1e-3,
+        perimeter: PI * d,
+    });
+    let mut annulus = pipe("annulus", 0.4, d_ann);
+    annulus.porous = Some(fill);
+    let (net, s, o) = network(
+        vec![pipe("inlet", 1.5, d), tube, pipe("outlet", 1.1, d), annulus],
+        vec![
+            Node::Junction(JunctionBc {
+                ports: vec![Port::end(0), Port::start(1)],
+                kind: JunctionKind::AreaChange,
+            }),
+            Node::Junction(JunctionBc {
+                ports: vec![Port::end(1), Port::start(2)],
+                kind: JunctionKind::AreaChange,
+            }),
+            Node::Wall(Port::start(3)),
+            Node::Wall(Port::end(3)),
+        ],
+        Port::end(2),
+    );
+    checks.push(Check::new(
+        case,
+        "packed absorptive muffler: max |ΔL| over harmonics, dB",
+        compare(&net, s, o, &[1.0, 1.0, 1.0, 0.0])?,
         2.0,
     ));
     Ok(checks)

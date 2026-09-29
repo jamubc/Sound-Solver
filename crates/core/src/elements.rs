@@ -13,11 +13,23 @@ use std::f64::consts::PI;
 use crate::error::{Error, Result};
 use crate::gas::Gas;
 use crate::gas1d::nodes::JunctionKind;
-use crate::gas1d::{Duct, JunctionBc, Node, Port, WallSpec};
+use crate::gas1d::{Duct, JunctionBc, Node, Perforate, Porous, Port, WallSpec};
 use crate::project::{
-    Catalyst, Element, ElementKind, ExpansionChamber, Helmholtz, PipeSpec, PortRef, Project,
-    QuarterWaveStub, Valve, WallThermal,
+    Absorptive, Catalyst, Element, ElementKind, ExpansionChamber, Helmholtz, PipeSpec, PortRef,
+    Project, QuarterWaveStub, Valve, WallThermal,
 };
+
+/// Density of basalt and glass fibre, kg/m³.
+pub const FIBRE_DENSITY: f64 = 2500.0;
+
+/// Fill properties from packing density and fibre diameter: porosity `1 − ρ_b/ρ_fibre` and
+/// flow resistivity `σ_f = 3.18·10⁻⁹ ρ_b^{1.53} / d²` (Bies & Hansen 1980, SI units), Pa s/m².
+pub fn fill_properties(bulk_density: f64, fibre_diameter: f64) -> Porous {
+    Porous {
+        resistivity: 3.18e-9 * bulk_density.powf(1.53) / (fibre_diameter * fibre_diameter),
+        porosity: 1.0 - bulk_density / FIBRE_DENSITY,
+    }
+}
 
 /// Poiseuille number `f·Re` of fully developed laminar flow in a square channel
 /// (Shah & London 1978, Table 42).
@@ -122,6 +134,7 @@ pub fn build(el: &Element, b: &mut Builder) -> Result<()> {
         ElementKind::Helmholtz(h) => helmholtz(el, h, b),
         ElementKind::Catalyst(c) => catalyst(el, c, b),
         ElementKind::Valve(v) => valve(el, v, b),
+        ElementKind::Absorptive(a) => absorptive(el, a, b),
         ElementKind::Tee(_) => {
             let ports = vec![b.port(el, "in"), b.port(el, "out"), b.port(el, "branch")];
             b.junction(ports, JunctionKind::ConstantPressure);
@@ -312,6 +325,51 @@ fn catalyst(el: &Element, c: &Catalyst, b: &mut Builder) {
     } else {
         b.join(Port::end(brick), pout);
     }
+}
+
+/// Absorptive muffler: the perforated tube (pipe bore) and the annulus are two ducts on one
+/// grid, coupled cell by cell through the perforate (`gas1d::Perforate`); the annulus holds
+/// the fill as a porous medium (`gas1d::Porous`) of gas area `φ A_annulus` and is closed at
+/// both case ends.
+fn absorptive(el: &Element, a: &Absorptive, b: &mut Builder) {
+    let (pin, pout) = (b.port(el, "in"), b.port(el, "out"));
+    let d = b.bore(pin);
+    let t = a.perforate_thickness_mm * 1e-3;
+    let (dc, l) = (a.case_diameter_mm * 1e-3, a.length_mm * 1e-3);
+    let fill = (a.fill_density_kg_m3 > 0.0)
+        .then(|| fill_properties(a.fill_density_kg_m3, a.fiber_diameter_um * 1e-6));
+    let d_o = d + 2.0 * t;
+    let gas_area = fill.map_or(1.0, |f| f.porosity) * (circle(dc) - circle(d_o));
+    let inner_idx = b.ducts.len();
+    let mut inner = b.straight(format!("{} (perforated tube)", el.id), l, d);
+    inner.perforate = Some(Perforate {
+        partner: inner_idx + 1,
+        porosity: a.open_area_ratio,
+        hole_diameter: a.hole_diameter_mm * 1e-3,
+        thickness: t,
+        perimeter: PI * d,
+    });
+    let mut outer = b.straight(
+        format!("{} (annulus)", el.id),
+        l,
+        (4.0 * gas_area / PI).sqrt(),
+    );
+    outer.diameter.iter_mut().for_each(|h| *h = dc - d_o);
+    outer.porous = fill;
+    let pipe = b.pipe(el, "in").clone();
+    outer.wall = b.pipe_wall(
+        dc + 2.0 * a.shell_mm * 1e-3,
+        a.shell_mm * 1e-3,
+        &pipe.material,
+    );
+    let inner = b.duct(inner);
+    let outer = b.duct(outer);
+    // The fill model carries the viscous losses; the case walls add a negligible share.
+    b.ducts[outer].friction &= fill.is_none();
+    b.join(pin, Port::start(inner));
+    b.join(Port::end(inner), pout);
+    b.node(Node::Wall(Port::start(outer)));
+    b.node(Node::Wall(Port::end(outer)));
 }
 
 /// Butterfly valve loss coefficient on the pipe velocity against closure angle from fully

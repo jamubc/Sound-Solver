@@ -217,6 +217,7 @@ pub enum ElementKind {
     Catalyst(Catalyst),
     Valve(Valve),
     Tee(Tee),
+    Absorptive(Absorptive),
 }
 
 fn default_shell() -> f64 {
@@ -293,6 +294,34 @@ pub struct Catalyst {
     pub outlet_cone_mm: f64,
 }
 
+/// Absorptive straight-through muffler: perforated tube of the pipe bore inside a cylindrical
+/// case; the annulus is packed with fibre (or empty: a concentric-tube resonator). Ports `in`
+/// at `position_mm` and `out` at `position_mm + axis·length_mm`.
+#[derive(Clone, Debug, PartialEq, Serialize, Deserialize, JsonSchema)]
+#[serde(deny_unknown_fields)]
+pub struct Absorptive {
+    /// Inner diameter of the case, mm.
+    pub case_diameter_mm: f64,
+    pub length_mm: f64,
+    /// Open-area ratio of the perforated tube.
+    pub open_area_ratio: f64,
+    pub hole_diameter_mm: f64,
+    /// Perforated tube wall, mm.
+    pub perforate_thickness_mm: f64,
+    /// Packing density, kg/m³ (0: empty annulus).
+    #[serde(default)]
+    pub fill_density_kg_m3: f64,
+    /// Fibre diameter, µm (basalt or glass wool ≈ 10–13 µm).
+    #[serde(default = "default_fibre")]
+    pub fiber_diameter_um: f64,
+    #[serde(default = "default_shell")]
+    pub shell_mm: f64,
+}
+
+fn default_fibre() -> f64 {
+    12.0
+}
+
 /// Butterfly valve (electric cutout or exhaust flap). Ports `in` and `out` at `position_mm`.
 #[derive(Clone, Debug, PartialEq, Serialize, Deserialize, JsonSchema)]
 #[serde(deny_unknown_fields)]
@@ -348,6 +377,7 @@ impl Element {
             (ElementKind::Catalyst(c), "out") => {
                 along(c.inlet_cone_mm + c.brick_length_mm + c.outlet_cone_mm)
             }
+            (ElementKind::Absorptive(a), "out") => along(a.length_mm),
             _ => self.position_mm,
         })
     }
@@ -411,6 +441,21 @@ impl Element {
             }
             ElementKind::Valve(v) if !(0.0..=90.0).contains(&v.angle_deg) => {
                 bad("valve angle must be 0–90°")
+            }
+            ElementKind::Absorptive(a) => {
+                if a.case_diameter_mm <= 0.0 || a.length_mm <= 0.0 || a.shell_mm <= 0.0 {
+                    return bad("case diameter, length and shell must be > 0");
+                }
+                if !(0.01..=0.5).contains(&a.open_area_ratio)
+                    || a.hole_diameter_mm <= 0.0
+                    || a.perforate_thickness_mm <= 0.0
+                {
+                    return bad("open-area ratio must be 1–50 % and holes and wall > 0");
+                }
+                if !(0.0..500.0).contains(&a.fill_density_kg_m3) || a.fiber_diameter_um <= 0.0 {
+                    return bad("fill density must be 0–500 kg/m³ and fibre diameter > 0");
+                }
+                Ok(())
             }
             _ => Ok(()),
         }

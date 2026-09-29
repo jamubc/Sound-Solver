@@ -462,6 +462,64 @@
           "required": [
             "type"
           ]
+        },
+        {
+          "description": "Absorptive straight-through muffler: perforated tube of the pipe bore inside a cylindrical\ncase; the annulus is packed with fibre (or empty: a concentric-tube resonator). Ports `in`\nat `position_mm` and `out` at `position_mm + axis·length_mm`.",
+          "type": "object",
+          "properties": {
+            "case_diameter_mm": {
+              "description": "Inner diameter of the case, mm.",
+              "type": "number",
+              "format": "double"
+            },
+            "fiber_diameter_um": {
+              "description": "Fibre diameter, µm (basalt or glass wool ≈ 10–13 µm).",
+              "type": "number",
+              "format": "double",
+              "default": 12.0
+            },
+            "fill_density_kg_m3": {
+              "description": "Packing density, kg/m³ (0: empty annulus).",
+              "type": "number",
+              "format": "double",
+              "default": 0.0
+            },
+            "hole_diameter_mm": {
+              "type": "number",
+              "format": "double"
+            },
+            "length_mm": {
+              "type": "number",
+              "format": "double"
+            },
+            "open_area_ratio": {
+              "description": "Open-area ratio of the perforated tube.",
+              "type": "number",
+              "format": "double"
+            },
+            "perforate_thickness_mm": {
+              "description": "Perforated tube wall, mm.",
+              "type": "number",
+              "format": "double"
+            },
+            "shell_mm": {
+              "type": "number",
+              "format": "double",
+              "default": 1.2
+            },
+            "type": {
+              "type": "string",
+              "const": "absorptive"
+            }
+          },
+          "required": [
+            "type",
+            "case_diameter_mm",
+            "length_mm",
+            "open_area_ratio",
+            "hole_diameter_mm",
+            "perforate_thickness_mm"
+          ]
         }
       ],
       "required": [

@@ -20,6 +20,7 @@
 //! characteristics, see `nodes`).
 
 pub mod nodes;
+pub mod porous;
 pub mod scheme;
 pub mod stokes;
 pub mod wall;
@@ -30,6 +31,7 @@ pub use nodes::{
     CharacteristicBc, CylPhase, JunctionBc, JunctionKind, Manifold, MassFlowBc, Node, RadiationBc,
     Signal, SourceBc,
 };
+pub use porous::Porous;
 
 /// Most duct ends one node may join.
 pub const MAX_PORTS: usize = 8;
@@ -94,6 +96,40 @@ pub struct Duct {
     pub channel: Option<f64>,
     /// Outer wall seen by the thermal model; `None` loses no heat to ambient.
     pub wall: Option<WallSpec>,
+    /// Perforated wall coupling this duct, cell by cell, to a partner duct of the same grid
+    /// (the annulus of an absorptive muffler). Set on the inner duct only.
+    pub perforate: Option<Perforate>,
+    /// Fibrous fill occupying the duct (the annulus of an absorptive muffler).
+    pub porous: Option<Porous>,
+}
+
+/// Perforated tube wall between a duct and its partner.
+#[derive(Clone, Copy, Debug, PartialEq)]
+pub struct Perforate {
+    pub partner: usize,
+    /// Open-area ratio σ.
+    pub porosity: f64,
+    pub hole_diameter: f64,
+    pub thickness: f64,
+    /// Tube circumference over which the transverse velocity is averaged, m.
+    pub perimeter: f64,
+}
+
+impl Perforate {
+    /// Discharge coefficient of the sharp-edged holes for the nonlinear (jet) resistance.
+    pub const DISCHARGE: f64 = 0.61;
+
+    /// Effective hole length `t + 0.75 d` (Sullivan & Crocker 1978).
+    pub fn effective_length(&self) -> f64 {
+        self.thickness + 0.75 * self.hole_diameter
+    }
+
+    /// Normalised linear resistance of the perforate, referred to the area-averaged transverse
+    /// velocity: Sullivan & Crocker's 0.006 without flow, plus the grazing-flow term of Rao &
+    /// Munjal (1986), `0.006 + 0.53 M`, divided by σ.
+    pub fn resistance(&self, grazing_mach: f64) -> f64 {
+        (0.006 + 0.53 * grazing_mach.abs()) / self.porosity
+    }
 }
 
 /// Pipe or shell wall between the gas and ambient air.
@@ -177,6 +213,8 @@ impl Duct {
             k_loss: vec![0.0; n],
             channel: None,
             wall: None,
+            perforate: None,
+            porous: None,
         }
     }
 
@@ -266,6 +304,19 @@ impl Network {
                     "duct '{}' ends must each join exactly one node (start {}, end {})",
                     self.ducts[i].label, c[0], c[1]
                 )));
+            }
+        }
+        for duct in &self.ducts {
+            if let Some(perf) = &duct.perforate {
+                let ok = self.ducts.get(perf.partner).is_some_and(|o| {
+                    o.n() == duct.n() && (o.dx - duct.dx).abs() < 1e-12 && o.perforate.is_none()
+                });
+                if !ok {
+                    return Err(Error::invalid(format!(
+                        "duct '{}': perforate partner must exist, share its grid and not be coupled itself",
+                        duct.label
+                    )));
+                }
             }
         }
         Ok(())
@@ -386,13 +437,24 @@ pub struct Simulation {
     phi: Vec<Vec<f64>>,
     /// Velocity and temperature of each cell at the start of the step.
     start: Vec<Vec<(f64, f64)>>,
+    /// Transverse velocity through each cell's perforate (inner ducts of coupled pairs).
+    perforate_u: Vec<Vec<f64>>,
+    /// Diffusive representation behind the fills' `√(s + a)` operators.
+    fill_rep: stokes::HalfDerivative,
+    /// Fill memory states per porous duct: for each cell, the drag states then the heat
+    /// exchange states.
+    fill: Vec<Vec<f64>>,
+    /// Fibre temperature of each porous cell: its initial gas temperature.
+    fill_t: Vec<Vec<f64>>,
+    /// Momentum removed and energy added by the fill in each porous cell's stage-1 predictor.
+    fill_pred: Vec<Vec<[f64; 2]>>,
 }
 
 impl Simulation {
     /// Initialises every cell from `init(duct, x) = (ρ, u, p)` at the cell centre.
     pub fn new(net: Network, init: impl Fn(usize, f64) -> (f64, f64, f64)) -> Result<Self> {
         net.validate()?;
-        let mut q = Vec::with_capacity(net.ducts.len());
+        let mut q: Vec<Vec<[f64; 3]>> = Vec::with_capacity(net.ducts.len());
         for (d, duct) in net.ducts.iter().enumerate() {
             q.push(
                 (0..duct.n())
@@ -441,6 +503,30 @@ impl Simulation {
             })
             .collect();
         let start = net.ducts.iter().map(|d| vec![(0.0, 0.0); d.n()]).collect();
+        let perforate_u = net
+            .ducts
+            .iter()
+            .map(|d| vec![0.0; if d.perforate.is_some() { d.n() } else { 0 }])
+            .collect();
+        let fill_rep = stokes::HalfDerivative::band(porous::BAND.0, porous::BAND.1);
+        let np = fill_rep.states();
+        let (mut fill, mut fill_t) = (Vec::new(), Vec::new());
+        for (duct, q) in net.ducts.iter().zip(&q) {
+            let (mut states, mut temps) = (Vec::new(), Vec::new());
+            if let Some(f) = &duct.porous {
+                for c in q {
+                    let p = to_prim(&net.gas, *c);
+                    // Drag memory in equilibrium with the initial velocity.
+                    let wv = f.rates(&net.gas, p.rho, p.t).0;
+                    states.extend(fill_rep.poles.iter().map(|s| p.u / (s + wv)));
+                    states.extend(std::iter::repeat_n(0.0, np));
+                    temps.push(p.t);
+                }
+            }
+            fill.push(states);
+            fill_t.push(temps);
+        }
+        let fill_pred = fill_t.iter().map(|t| vec![[0.0; 2]; t.len()]).collect();
         Ok(Self {
             q_n: q.clone(),
             q,
@@ -455,6 +541,11 @@ impl Simulation {
             stokes,
             phi,
             start,
+            perforate_u,
+            fill_rep,
+            fill,
+            fill_t,
+            fill_pred,
         })
     }
 
@@ -539,6 +630,7 @@ impl Simulation {
                 *y += dt * k;
             }
         }
+        self.fills(dt, Stage::One);
 
         // Stage 2: qⁿ⁺¹ = ½qⁿ + ½(q¹ + Δt L(q¹)).
         self.update_prims()?;
@@ -564,12 +656,118 @@ impl Simulation {
         self.t = t0 + dt;
         self.steps += 1;
         self.stokes_layers(dt);
+        self.perforates(dt);
+        self.fills(dt, Stage::Two);
         for (st, node) in self.nodes.iter_mut().zip(&self.net.nodes) {
             if let Node::Source(src) = node {
                 src.update_phases(self.t, &self.net.gas, st);
             }
         }
         Ok(())
+    }
+
+    /// Flow through perforated walls, applied after the step cell pair by cell pair.
+    ///
+    /// The area-averaged transverse velocity `u` (inner to outer) obeys the Sullivan–Crocker
+    /// perforate impedance, `(ρ l_e/σ) du/dt + (ρc θ/σ + ρ|u|/(2C_d²σ²)) u = p_in − p_out`
+    /// (`Perforate`; the quadratic jet term makes it nonlinear at high amplitude), and moves mass
+    /// `ρ u A_s` across the tube surface `A_s = perimeter Δx`, which changes the pressure
+    /// difference at `K = ρ A_s (c_in²/V_in + c_out²/V_out)` per unit `u`. That pair is
+    /// integrated by the trapezoidal rule — the transverse resonance is too fast for the
+    /// explicit step at high porosity. The transferred mass carries its upstream stagnation
+    /// enthalpy (energy conserved) and takes the axial velocity of the channel it is in, the
+    /// wall taking the difference: Sullivan–Crocker's momentum equation, which the four-pole
+    /// model shares, has no transfer term.
+    fn perforates(&mut self, dt: f64) {
+        let gas = &self.net.gas;
+        for d in 0..self.net.ducts.len() {
+            let Some(perf) = self.net.ducts[d].perforate else {
+                continue;
+            };
+            let o = perf.partner;
+            let (inner, outer) = (&self.net.ducts[d], &self.net.ducts[o]);
+            let l_e = perf.effective_length();
+            for i in 0..inner.n() {
+                let (pi, po) = (to_prim(gas, self.q[d][i]), to_prim(gas, self.q[o][i]));
+                let (vi, vo) = (inner.volume[i], outer.volume[i]);
+                let area = perf.perimeter * inner.dx;
+                let u0 = self.perforate_u[d][i];
+                let rho = if u0 >= 0.0 { pi.rho } else { po.rho };
+                let mass = rho * l_e / perf.porosity;
+                let resist = rho * pi.c * perf.resistance(pi.u / pi.c)
+                    + rho * u0.abs() / (2.0 * (Perforate::DISCHARGE * perf.porosity).powi(2));
+                let k = rho * area * (pi.c * pi.c / vi + po.c * po.c / vo);
+                let a = dt / mass * (0.25 * k * dt + 0.5 * resist);
+                let u1 = (u0 * (1.0 - a) + dt / mass * (pi.p - po.p)) / (1.0 + a);
+                self.perforate_u[d][i] = u1;
+                let dm = rho * area * dt * 0.5 * (u0 + u1);
+                let (from, to, src) = if dm >= 0.0 { (d, o, pi) } else { (o, d, po) };
+                let (v_from, v_to) = if dm >= 0.0 { (vi, vo) } else { (vo, vi) };
+                let m = dm.abs();
+                let h0 = src.en / src.rho + src.p / src.rho;
+                for (duct, sign, v) in [(from, -1.0, v_from), (to, 1.0, v_to)] {
+                    let u = if duct == d { pi.u } else { po.u };
+                    let q = &mut self.q[duct][i];
+                    q[0] += sign * m / v;
+                    q[1] += sign * m * u / v;
+                    q[2] += sign * m * h0 / v;
+                }
+            }
+        }
+    }
+
+    /// Fibre drag and heat exchange of porous fills (`porous`), implicit: at dense packings the
+    /// drag stops the pore gas far faster than the acoustic step. Stage 1's predictor is relaxed
+    /// by backward Euler, so stage 2's fluxes carry fill velocities, not free-gas ones (which
+    /// would move a factor `1 + λΔt/2` too much gas); after stage 2 the half of those terms the
+    /// stage average holds is taken out and the whole step relaxed again, advancing the memory:
+    /// the explicit trapezoid for the fluxes, backward Euler for the fill, statics exact. The
+    /// drag keeps the total energy (the kinetic energy it removes becomes heat); the heat
+    /// exchange moves the internal energy toward the fibre temperature.
+    fn fills(&mut self, dt: f64, stage: Stage) {
+        let gas = &self.net.gas;
+        let np = self.fill_rep.states();
+        let last = stage == Stage::Two;
+        let decay: Vec<f64> = self
+            .fill_rep
+            .poles
+            .iter()
+            .map(|s| (-s * dt).exp())
+            .collect();
+        for (d, duct) in self.net.ducts.iter().enumerate() {
+            let Some(fill) = &duct.porous else { continue };
+            for i in 0..duct.n() {
+                let (psi_u, psi_t) = self.fill[d][2 * np * i..2 * np * (i + 1)].split_at_mut(np);
+                let q = &mut self.q[d][i];
+                let pred = &mut self.fill_pred[d][i];
+                if last {
+                    q[1] += 0.5 * pred[0];
+                    q[2] -= 0.5 * pred[1];
+                }
+                let p = to_prim(gas, *q);
+                let (wv, wt) = fill.rates(gas, p.rho, p.t);
+                let c = fill.drag(gas, p.t) / (p.rho * wv.sqrt());
+                let u = porous::relax(&self.fill_rep, &decay, psi_u, p.u, wv, c, dt, last);
+                q[1] = p.rho * u;
+                let p2 = to_prim(gas, *q);
+                let tf = self.fill_t[d][i];
+                let c = gas.gamma(p2.t) * (0.5 * wt).sqrt();
+                let theta = porous::relax(
+                    &self.fill_rep,
+                    &decay,
+                    psi_t,
+                    p2.t - tf,
+                    2.0 * wt,
+                    c,
+                    dt,
+                    last,
+                );
+                let de = p2.rho * (gas.e(tf + theta) - gas.e(p2.t));
+                q[2] += de;
+                // Momentum the drag removed and energy the fibres added.
+                *pred = [p.rho * (p.u - u), de];
+            }
+        }
     }
 
     /// Stokes-layer wall shear and heat flux (`stokes`), applied after the step from the
