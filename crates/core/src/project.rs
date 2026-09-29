@@ -737,11 +737,14 @@ impl Project {
         serde_json::to_string_pretty(self).expect("project serialises")
     }
 
-    /// BLAKE3 hash of the canonical JSON without the data no solved point depends on
-    /// (fabrication: stock, scan, hangers, joints; measurements); keys result caches and
-    /// provenance.
+    /// BLAKE3 hash of the canonical JSON without the data no solved point depends on (name,
+    /// notes, bases; the sweep and cruise band; measurements; fabrication: stock, scan,
+    /// hangers, joints); keys result caches and provenance.
     pub fn hash(&self) -> String {
         let mut solved = self.clone();
+        (solved.name, solved.notes) = (String::new(), String::new());
+        solved.basis.clear();
+        (solved.operating.sweep_rpm, solved.operating.cruise_band_rpm) = ([0.0; 3], [0.0; 2]);
         solved.fabrication = Fabrication::default();
         solved.measurements = Measurements::default();
         for r in &mut solved.system.routes {
