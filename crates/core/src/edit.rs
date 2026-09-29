@@ -68,6 +68,8 @@ pub fn insert(project: &mut Project, route: &str, s_mm: f64, kind: &str) -> Resu
     let split = segment.min(original.via_mm.len());
     let (via_a, via_b) = original.via_mm.split_at(split);
     let radius = |i: usize| original.bend_radius_mm.get(i).copied().flatten();
+    // Hangers keep their place on the pipe; any the element now covers go.
+    let resume = (s + needed) * 1e3;
     let first = Route {
         id: original.id.clone(),
         from: original.from.clone(),
@@ -75,6 +77,14 @@ pub fn insert(project: &mut Project, route: &str, s_mm: f64, kind: &str) -> Resu
         via_mm: via_a.to_vec(),
         bend_radius_mm: (0..split).map(radius).collect(),
         pipe: original.pipe.clone(),
+        hangers_mm: original
+            .hangers_mm
+            .iter()
+            .copied()
+            .filter(|&h| h < s_mm)
+            .collect(),
+        start_joint: original.start_joint,
+        end_joint: None,
     };
     let second = Route {
         id: unique(&original.id, |c| {
@@ -85,6 +95,14 @@ pub fn insert(project: &mut Project, route: &str, s_mm: f64, kind: &str) -> Resu
         via_mm: via_b.to_vec(),
         bend_radius_mm: (split..original.via_mm.len()).map(radius).collect(),
         pipe: original.pipe.clone(),
+        hangers_mm: original
+            .hangers_mm
+            .iter()
+            .filter(|&&h| h > resume)
+            .map(|h| h - resume)
+            .collect(),
+        start_joint: None,
+        end_joint: original.end_joint,
     };
     edited.system.routes[index] = first;
     edited.system.routes.insert(index + 1, second);
@@ -121,15 +139,24 @@ pub fn remove(project: &mut Project, id: &str) -> Result<()> {
             })
     };
     let (a, b) = (touching(&pin)?, touching(&pout)?);
+    let length = |r: &Route| -> Result<f64> {
+        Ok(centreline(&edited.route_points(r)?, &edited.route_radii(r))?.length * 1e3)
+    };
+    let (length_a, length_b) = (
+        length(&edited.system.routes[a])?,
+        length(&edited.system.routes[b])?,
+    );
     // Orient the first route to end at `in` and the second to start at `out`.
-    let into = oriented(&edited.system.routes[a], |r| r.to == pin);
-    let from = oriented(&edited.system.routes[b], |r| r.from == pout);
-    let mut via = into.via_mm.clone();
-    let mut radii = padded(&into);
-    for p in [
+    let into = oriented(&edited.system.routes[a], length_a, |r| r.to == pin);
+    let from = oriented(&edited.system.routes[b], length_b, |r| r.from == pout);
+    let (p_in, p_out) = (
         element.port_position("in").expect("two-port element"),
         element.port_position("out").expect("two-port element"),
-    ] {
+    );
+    let offset = length_a + norm(sub(p_out, p_in));
+    let mut via = into.via_mm.clone();
+    let mut radii = padded(&into);
+    for p in [p_in, p_out] {
         if via.last().is_none_or(|q| norm(sub(p, *q)) > 1.0) {
             via.push(p);
             radii.push(None);
@@ -152,6 +179,14 @@ pub fn remove(project: &mut Project, id: &str) -> Result<()> {
         via_mm: via,
         bend_radius_mm: radii,
         pipe: into.pipe.clone(),
+        hangers_mm: into
+            .hangers_mm
+            .iter()
+            .copied()
+            .chain(from.hangers_mm.iter().map(|h| h + offset))
+            .collect(),
+        start_joint: into.start_joint,
+        end_joint: from.end_joint,
     };
     edited.system.routes[a] = joined;
     edited.system.routes.remove(b);
@@ -169,17 +204,24 @@ fn port(element: &str, port: &str) -> PortRef {
     }
 }
 
-/// `route`, reversed unless `good` already holds.
-fn oriented(route: &Route, good: impl Fn(&Route) -> bool) -> Route {
+/// `route` (centreline `length_mm` long), reversed unless `good` already holds.
+fn oriented(route: &Route, length_mm: f64, good: impl Fn(&Route) -> bool) -> Route {
     if good(route) {
         return route.clone();
     }
     let mut r = route.clone();
     std::mem::swap(&mut r.from, &mut r.to);
+    std::mem::swap(&mut r.start_joint, &mut r.end_joint);
     r.via_mm.reverse();
     let mut radii = padded(route);
     radii.reverse();
     r.bend_radius_mm = radii;
+    r.hangers_mm = route
+        .hangers_mm
+        .iter()
+        .rev()
+        .map(|h| length_mm - h)
+        .collect();
     r
 }
 

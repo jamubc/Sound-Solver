@@ -42,6 +42,8 @@ pub struct Project {
     pub materials: Vec<Material>,
     #[serde(default, skip_serializing_if = "Measurements::is_empty")]
     pub measurements: Measurements,
+    #[serde(default)]
+    pub fabrication: Fabrication,
 }
 
 /// Data measured on the vehicle and stored with the project.
@@ -500,6 +502,109 @@ pub struct Route {
     #[serde(default)]
     pub bend_radius_mm: Vec<Option<f64>>,
     pub pipe: PipeSpec,
+    /// Hangers, mm along the centreline from the route's start.
+    #[serde(default, skip_serializing_if = "Vec::is_empty")]
+    pub hangers_mm: Vec<f64>,
+    /// Joint to the element at the route's start; absent: a flange at the source, else a
+    /// butt weld.
+    #[serde(default, skip_serializing_if = "Option::is_none")]
+    pub start_joint: Option<Joint>,
+    /// Joint to the element at the route's end; absent as for `start_joint`.
+    #[serde(default, skip_serializing_if = "Option::is_none")]
+    pub end_joint: Option<Joint>,
+}
+
+/// How two parts are joined.
+#[derive(Clone, Copy, Debug, PartialEq, Eq, Serialize, Deserialize, JsonSchema)]
+#[serde(rename_all = "snake_case")]
+pub enum Joint {
+    Butt,
+    Slip,
+    VBand,
+    Flange,
+}
+
+/// Fabrication settings: stock, cutting, and underbody clearance.
+#[derive(Clone, Debug, PartialEq, Serialize, Deserialize, JsonSchema)]
+#[serde(deny_unknown_fields)]
+pub struct Fabrication {
+    /// Straight tube is bought in lengths of, mm (10 ft).
+    #[serde(default = "default_stock_length")]
+    pub stock_length_mm: f64,
+    /// Saw kerf per cut, mm.
+    #[serde(default = "default_kerf")]
+    pub kerf_mm: f64,
+    /// A stock 45° or 90° mandrel bend is used uncut within this angle, degrees.
+    #[serde(default = "default_bend_tolerance")]
+    pub stock_bend_tolerance_deg: f64,
+    /// Gap wanted between pipe surface and underbody, mm.
+    #[serde(default = "default_clearance")]
+    pub clearance_mm: f64,
+    /// Stretches that need a different gap (near the rear axle, say).
+    #[serde(default, skip_serializing_if = "Vec::is_empty")]
+    pub clearance_zones: Vec<ClearanceZone>,
+    /// Underbody scan and where it sits on the car.
+    #[serde(default, skip_serializing_if = "Option::is_none")]
+    pub scan: Option<Scan>,
+}
+
+impl Default for Fabrication {
+    fn default() -> Self {
+        Self {
+            stock_length_mm: default_stock_length(),
+            kerf_mm: default_kerf(),
+            stock_bend_tolerance_deg: default_bend_tolerance(),
+            clearance_mm: default_clearance(),
+            clearance_zones: Vec::new(),
+            scan: None,
+        }
+    }
+}
+
+fn default_stock_length() -> f64 {
+    3048.0
+}
+
+fn default_kerf() -> f64 {
+    3.0
+}
+
+fn default_bend_tolerance() -> f64 {
+    0.5
+}
+
+fn default_clearance() -> f64 {
+    25.0
+}
+
+/// A stretch along the car, `x_min_mm ≤ x ≤ x_max_mm`, with its own clearance.
+#[derive(Clone, Debug, PartialEq, Serialize, Deserialize, JsonSchema)]
+#[serde(deny_unknown_fields)]
+pub struct ClearanceZone {
+    pub name: String,
+    pub x_min_mm: f64,
+    pub x_max_mm: f64,
+    pub clearance_mm: f64,
+}
+
+/// An underbody scan (STL or OBJ, metres or millimetres as `unit_mm` says) and three points on
+/// it with their places on the car (jack pads, say), which fix its position.
+#[derive(Clone, Debug, PartialEq, Serialize, Deserialize, JsonSchema)]
+#[serde(deny_unknown_fields)]
+pub struct Scan {
+    /// Relative to the project file, or absolute.
+    pub path: String,
+    /// Millimetres per scan unit (1000 for a scan in metres).
+    #[serde(default = "default_scan_unit")]
+    pub unit_mm: f64,
+    /// Reference points in scan coordinates (scan units).
+    pub scan_points: [Vec3; 3],
+    /// The same points in vehicle coordinates, mm.
+    pub vehicle_points_mm: [Vec3; 3],
+}
+
+fn default_scan_unit() -> f64 {
+    1.0
 }
 
 #[derive(Clone, Debug, PartialEq, Serialize, Deserialize, JsonSchema)]
@@ -599,10 +704,16 @@ impl Project {
         serde_json::to_string_pretty(self).expect("project serialises")
     }
 
-    /// BLAKE3 hash of the canonical JSON; keys result caches and provenance.
+    /// BLAKE3 hash of the canonical JSON without the fabrication-only data (stock, scan,
+    /// hangers, joints) no result depends on; keys result caches and provenance.
     pub fn hash(&self) -> String {
+        let mut solved = self.clone();
+        solved.fabrication = Fabrication::default();
+        for r in &mut solved.system.routes {
+            (r.hangers_mm, r.start_joint, r.end_joint) = (Vec::new(), None, None);
+        }
         blake3::hash(
-            serde_json::to_string(self)
+            serde_json::to_string(&solved)
                 .expect("project serialises")
                 .as_bytes(),
         )

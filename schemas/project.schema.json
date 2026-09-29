@@ -17,6 +17,15 @@
     "engine": {
       "$ref": "#/$defs/EngineSpec"
     },
+    "fabrication": {
+      "$ref": "#/$defs/Fabrication",
+      "default": {
+        "clearance_mm": 25.0,
+        "kerf_mm": 3.0,
+        "stock_bend_tolerance_deg": 0.5,
+        "stock_length_mm": 3048.0
+      }
+    },
     "gas": {
       "$ref": "#/$defs/GasSpec"
     },
@@ -181,6 +190,34 @@
           "type": "string",
           "const": "impulse"
         }
+      ]
+    },
+    "ClearanceZone": {
+      "description": "A stretch along the car, `x_min_mm ≤ x ≤ x_max_mm`, with its own clearance.",
+      "type": "object",
+      "properties": {
+        "clearance_mm": {
+          "type": "number",
+          "format": "double"
+        },
+        "name": {
+          "type": "string"
+        },
+        "x_max_mm": {
+          "type": "number",
+          "format": "double"
+        },
+        "x_min_mm": {
+          "type": "number",
+          "format": "double"
+        }
+      },
+      "additionalProperties": false,
+      "required": [
+        "name",
+        "x_min_mm",
+        "x_max_mm",
+        "clearance_mm"
       ]
     },
     "Element": {
@@ -730,6 +767,55 @@
         "max_lift_mm"
       ]
     },
+    "Fabrication": {
+      "description": "Fabrication settings: stock, cutting, and underbody clearance.",
+      "type": "object",
+      "properties": {
+        "clearance_mm": {
+          "description": "Gap wanted between pipe surface and underbody, mm.",
+          "type": "number",
+          "format": "double",
+          "default": 25.0
+        },
+        "clearance_zones": {
+          "description": "Stretches that need a different gap (near the rear axle, say).",
+          "type": "array",
+          "items": {
+            "$ref": "#/$defs/ClearanceZone"
+          }
+        },
+        "kerf_mm": {
+          "description": "Saw kerf per cut, mm.",
+          "type": "number",
+          "format": "double",
+          "default": 3.0
+        },
+        "scan": {
+          "description": "Underbody scan and where it sits on the car.",
+          "anyOf": [
+            {
+              "$ref": "#/$defs/Scan"
+            },
+            {
+              "type": "null"
+            }
+          ]
+        },
+        "stock_bend_tolerance_deg": {
+          "description": "A stock 45° or 90° mandrel bend is used uncut within this angle, degrees.",
+          "type": "number",
+          "format": "double",
+          "default": 0.5
+        },
+        "stock_length_mm": {
+          "description": "Straight tube is bought in lengths of, mm (10 ft).",
+          "type": "number",
+          "format": "double",
+          "default": 3048.0
+        }
+      },
+      "additionalProperties": false
+    },
     "GasSpec": {
       "type": "object",
       "properties": {
@@ -748,6 +834,16 @@
       "required": [
         "fuel_h_to_c",
         "lambda"
+      ]
+    },
+    "Joint": {
+      "description": "How two parts are joined.",
+      "type": "string",
+      "enum": [
+        "butt",
+        "slip",
+        "v_band",
+        "flange"
       ]
     },
     "Limiter": {
@@ -1001,14 +1097,44 @@
             "format": "double"
           }
         },
+        "end_joint": {
+          "description": "Joint to the element at the route's end; absent as for `start_joint`.",
+          "anyOf": [
+            {
+              "$ref": "#/$defs/Joint"
+            },
+            {
+              "type": "null"
+            }
+          ]
+        },
         "from": {
           "$ref": "#/$defs/PortRef"
+        },
+        "hangers_mm": {
+          "description": "Hangers, mm along the centreline from the route's start.",
+          "type": "array",
+          "items": {
+            "type": "number",
+            "format": "double"
+          }
         },
         "id": {
           "type": "string"
         },
         "pipe": {
           "$ref": "#/$defs/PipeSpec"
+        },
+        "start_joint": {
+          "description": "Joint to the element at the route's start; absent: a flange at the source, else a\nbutt weld.",
+          "anyOf": [
+            {
+              "$ref": "#/$defs/Joint"
+            },
+            {
+              "type": "null"
+            }
+          ]
         },
         "to": {
           "$ref": "#/$defs/PortRef"
@@ -1034,6 +1160,58 @@
         "from",
         "to",
         "pipe"
+      ]
+    },
+    "Scan": {
+      "description": "An underbody scan (STL or OBJ, metres or millimetres as `unit_mm` says) and three points on\nit with their places on the car (jack pads, say), which fix its position.",
+      "type": "object",
+      "properties": {
+        "path": {
+          "description": "Relative to the project file, or absolute.",
+          "type": "string"
+        },
+        "scan_points": {
+          "description": "Reference points in scan coordinates (scan units).",
+          "type": "array",
+          "items": {
+            "type": "array",
+            "items": {
+              "type": "number",
+              "format": "double"
+            },
+            "maxItems": 3,
+            "minItems": 3
+          },
+          "maxItems": 3,
+          "minItems": 3
+        },
+        "unit_mm": {
+          "description": "Millimetres per scan unit (1000 for a scan in metres).",
+          "type": "number",
+          "format": "double",
+          "default": 1.0
+        },
+        "vehicle_points_mm": {
+          "description": "The same points in vehicle coordinates, mm.",
+          "type": "array",
+          "items": {
+            "type": "array",
+            "items": {
+              "type": "number",
+              "format": "double"
+            },
+            "maxItems": 3,
+            "minItems": 3
+          },
+          "maxItems": 3,
+          "minItems": 3
+        }
+      },
+      "additionalProperties": false,
+      "required": [
+        "path",
+        "scan_points",
+        "vehicle_points_mm"
       ]
     },
     "ScrollSpec": {

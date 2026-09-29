@@ -180,6 +180,13 @@ export type Element1 =
       shell_mm?: number;
       type: "absorptive";
     };
+/**
+ * How two parts are joined.
+ *
+ * This interface was referenced by `Project`'s JSON-Schema
+ * via the `definition` "Joint".
+ */
+export type Joint = "butt" | "slip" | "v_band" | "flange";
 
 export interface Project {
   ambient: Ambient;
@@ -191,6 +198,9 @@ export interface Project {
     [k: string]: Basis;
   };
   engine: EngineSpec;
+  fabrication?: Fabrication & {
+    [k: string]: unknown;
+  };
   gas: GasSpec;
   materials: Material[];
   measurements?: Measurements;
@@ -302,6 +312,81 @@ export interface ExhaustValves {
    */
   valve_diameter_mm: number;
   valves_per_cylinder: number;
+}
+/**
+ * Fabrication settings: stock, cutting, and underbody clearance.
+ *
+ * This interface was referenced by `Project`'s JSON-Schema
+ * via the `definition` "Fabrication".
+ */
+export interface Fabrication {
+  /**
+   * Gap wanted between pipe surface and underbody, mm.
+   */
+  clearance_mm?: number;
+  /**
+   * Stretches that need a different gap (near the rear axle, say).
+   */
+  clearance_zones?: ClearanceZone[];
+  /**
+   * Saw kerf per cut, mm.
+   */
+  kerf_mm?: number;
+  /**
+   * Underbody scan and where it sits on the car.
+   */
+  scan?: Scan | null;
+  /**
+   * A stock 45° or 90° mandrel bend is used uncut within this angle, degrees.
+   */
+  stock_bend_tolerance_deg?: number;
+  /**
+   * Straight tube is bought in lengths of, mm (10 ft).
+   */
+  stock_length_mm?: number;
+}
+/**
+ * A stretch along the car, `x_min_mm ≤ x ≤ x_max_mm`, with its own clearance.
+ *
+ * This interface was referenced by `Project`'s JSON-Schema
+ * via the `definition` "ClearanceZone".
+ */
+export interface ClearanceZone {
+  clearance_mm: number;
+  name: string;
+  x_max_mm: number;
+  x_min_mm: number;
+}
+/**
+ * An underbody scan (STL or OBJ, metres or millimetres as `unit_mm` says) and three points on
+ * it with their places on the car (jack pads, say), which fix its position.
+ *
+ * This interface was referenced by `Project`'s JSON-Schema
+ * via the `definition` "Scan".
+ */
+export interface Scan {
+  /**
+   * Relative to the project file, or absolute.
+   */
+  path: string;
+  /**
+   * Reference points in scan coordinates (scan units).
+   *
+   * @minItems 3
+   * @maxItems 3
+   */
+  scan_points: [[number, number, number], [number, number, number], [number, number, number]];
+  /**
+   * Millimetres per scan unit (1000 for a scan in metres).
+   */
+  unit_mm?: number;
+  /**
+   * The same points in vehicle coordinates, mm.
+   *
+   * @minItems 3
+   * @maxItems 3
+   */
+  vehicle_points_mm: [[number, number, number], [number, number, number], [number, number, number]];
 }
 /**
  * This interface was referenced by `Project`'s JSON-Schema
@@ -484,9 +569,22 @@ export interface Route {
    * Centreline bend radius at each interior vertex, mm; `null` uses 1.5 × OD.
    */
   bend_radius_mm?: (number | null)[];
+  /**
+   * Joint to the element at the route's end; absent as for `start_joint`.
+   */
+  end_joint?: Joint | null;
   from: PortRef;
+  /**
+   * Hangers, mm along the centreline from the route's start.
+   */
+  hangers_mm?: number[];
   id: string;
   pipe: PipeSpec;
+  /**
+   * Joint to the element at the route's start; absent: a flange at the source, else a
+   * butt weld.
+   */
+  start_joint?: Joint | null;
   to: PortRef;
   /**
    * Interior centreline vertices, mm; the ends are the ports' positions.

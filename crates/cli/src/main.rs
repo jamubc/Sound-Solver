@@ -6,10 +6,11 @@ use std::process::ExitCode;
 
 use clap::{Parser, Subcommand, ValueEnum};
 use exhaust_core::layout::layout;
-use exhaust_core::manifest;
 use exhaust_core::project::{Project, sweep_points};
+use exhaust_core::scan::{self, Mesh};
 use exhaust_core::solve::{SolverKind, sweep};
 use exhaust_core::validation::{PENDING, cases};
+use exhaust_core::{fabricate, manifest, solid};
 
 #[derive(Clone, Copy, ValueEnum)]
 enum Solver {
@@ -21,10 +22,26 @@ enum Solver {
 
 #[derive(Clone, Copy, ValueEnum)]
 enum Export {
-    /// Route centrelines and element envelopes, as the app draws them.
+    /// Route centrelines and element envelopes, as the app draws them (JSON).
     Layout,
-    /// Element manifests: parameters with units and allowed ranges.
+    /// Element manifests: parameters with units and allowed ranges (JSON).
     Manifests,
+    /// Straights, bends, stock sticks and joints, as the app lists them (JSON).
+    Fabrication,
+    /// Straights and bends with tube, stock stick and neighbours (CSV).
+    CutList,
+    /// Feed, rotation, angle and radius of every bend (CSV).
+    Bends,
+    /// Numbered joints with type and filler notes (Markdown).
+    Welds,
+    /// Pipe clearance to the project's underbody scan (Markdown).
+    Clearance,
+    /// Pipe runs as B-rep solids (STEP).
+    Step,
+    /// Pipe runs as a mesh (binary STL).
+    Stl,
+    /// All of the fabrication files, written beside the project file or into `--out`.
+    Package,
 }
 
 #[derive(Parser)]
@@ -53,13 +70,13 @@ enum Command {
         #[arg(long, short)]
         out: Option<PathBuf>,
     },
-    /// Export data derived from a project; prints JSON.
+    /// Export data derived from a project.
     Export {
         #[arg(value_enum)]
         what: Export,
         /// Project file (JSON); not needed for manifests.
         project: Option<PathBuf>,
-        /// Write the result here instead of standard output.
+        /// Write here instead of standard output (a directory for `package`).
         #[arg(long, short)]
         out: Option<PathBuf>,
     },
@@ -118,13 +135,46 @@ fn run(cli: Cli) -> Result<ExitCode, String> {
             Ok(ExitCode::SUCCESS)
         }
         Command::Export { what, project, out } => {
+            if let Export::Manifests = what {
+                emit(manifest::all(), out)?;
+                return Ok(ExitCode::SUCCESS);
+            }
+            let path = project.ok_or("this export needs a project file")?;
+            let project = read_project(&path)?;
+            let text = |s: String| write(out.as_deref(), s.as_bytes());
+            let err = |e: exhaust_core::Error| e.to_string();
             match what {
-                Export::Layout => {
-                    let path = project.ok_or("export layout needs a project file")?;
-                    let layout = layout(&read_project(&path)?).map_err(|e| e.to_string())?;
-                    emit(&layout, out)?;
+                Export::Manifests => unreachable!(),
+                Export::Layout => emit(&layout(&project).map_err(err)?, out)?,
+                Export::Fabrication => emit(&fabricate::check(&project).map_err(err)?, out)?,
+                Export::CutList => text(fabricate::cut_list_csv(
+                    &fabricate::check(&project).map_err(err)?,
+                ))?,
+                Export::Bends => text(fabricate::bend_schedule_csv(
+                    &fabricate::check(&project).map_err(err)?,
+                ))?,
+                Export::Welds => {
+                    let package = fabricate::check(&project).map_err(err)?;
+                    text(fabricate::weld_map_markdown(&project, &package))?
                 }
-                Export::Manifests => emit(manifest::all(), out)?,
+                Export::Clearance => {
+                    let mesh = read_scan(&path, &project)?.ok_or("the project has no scan")?;
+                    let report = scan::clearance(&project, &mesh).map_err(err)?;
+                    text(scan::report_markdown(&project, &report))?
+                }
+                Export::Step => text(solid::step(&project).map_err(err)?)?,
+                Export::Stl => write(out.as_deref(), &solid::stl(&project).map_err(err)?)?,
+                Export::Package => {
+                    let dir = match out {
+                        Some(dir) => dir,
+                        None => path.parent().map(Path::to_path_buf).unwrap_or_default(),
+                    };
+                    for file in package(&path, &project)? {
+                        let target = dir.join(&file.0);
+                        write(Some(&target), &file.1)?;
+                        eprintln!("wrote {}", target.display());
+                    }
+                }
             }
             Ok(ExitCode::SUCCESS)
         }
@@ -194,6 +244,44 @@ fn run(cli: Cli) -> Result<ExitCode, String> {
 fn read_project(path: &Path) -> Result<Project, String> {
     let text = std::fs::read_to_string(path).map_err(|e| format!("{}: {e}", path.display()))?;
     Project::from_json(&text).map_err(|e| e.to_string())
+}
+
+/// The project's underbody scan (path relative to the project file), if it has one.
+fn read_scan(project_path: &Path, project: &Project) -> Result<Option<Mesh>, String> {
+    let Some(scan) = &project.fabrication.scan else {
+        return Ok(None);
+    };
+    let file = project_path
+        .parent()
+        .unwrap_or(Path::new("."))
+        .join(&scan.path);
+    let bytes = std::fs::read(&file).map_err(|e| format!("{}: {e}", file.display()))?;
+    Mesh::parse(&scan.path, &bytes)
+        .map(Some)
+        .map_err(|e| format!("{}: {e}", file.display()))
+}
+
+/// The fabrication files, named after the project file.
+fn package(project_path: &Path, project: &Project) -> Result<Vec<(String, Vec<u8>)>, String> {
+    let stem = project_path
+        .file_stem()
+        .and_then(|s| s.to_str())
+        .unwrap_or("project");
+    let scan = read_scan(project_path, project)?;
+    fabricate::files(project, stem, scan.as_ref()).map_err(|e| e.to_string())
+}
+
+/// Writes `bytes` to `out`, or to standard output.
+fn write(out: Option<&Path>, bytes: &[u8]) -> Result<(), String> {
+    match out {
+        Some(path) => std::fs::write(path, bytes).map_err(|e| format!("{}: {e}", path.display())),
+        None => {
+            use std::io::Write;
+            std::io::stdout()
+                .write_all(bytes)
+                .map_err(|e| e.to_string())
+        }
+    }
 }
 
 /// Writes `value` as pretty JSON to `out`, or to standard output.

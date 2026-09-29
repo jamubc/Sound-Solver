@@ -91,6 +91,44 @@ impl Centreline {
         let n = self.points.len();
         unit(sub(self.points[n - 1], self.points[n - 2]))
     }
+
+    /// Point at arc length `s` (m) from the start.
+    pub fn point_at(&self, s: f64) -> Vec3 {
+        let points = &self.points;
+        for piece in &self.pieces {
+            if s > piece.s0() + piece.length() + 1e-12 {
+                continue;
+            }
+            let d = s - piece.s0();
+            return match piece {
+                Piece::Straight {
+                    from, to, length, ..
+                } if *length > 0.0 => add(*from, scale(unit(sub(*to, *from)), d)),
+                Piece::Straight { from, .. } => *from,
+                Piece::Arc {
+                    radius,
+                    vertex,
+                    angle,
+                    ..
+                } => {
+                    let i = *vertex;
+                    let d_in = unit(sub(points[i], points[i - 1]));
+                    let d_out = unit(sub(points[i + 1], points[i]));
+                    let turns = unit(sub(d_out, scale(d_in, dot(d_in, d_out))));
+                    let start = sub(points[i], scale(d_in, radius * (angle / 2.0).tan()));
+                    let theta = d / radius;
+                    add(
+                        start,
+                        add(
+                            scale(d_in, radius * theta.sin()),
+                            scale(turns, radius * (1.0 - theta.cos())),
+                        ),
+                    )
+                }
+            };
+        }
+        points[points.len() - 1]
+    }
 }
 
 /// Builds the centreline through `points` (m) with bend radius `radii[i]` (m) at interior

@@ -30,7 +30,8 @@
     "system.elements.cat": "approximate",
     "system.elements.resonator": "unknown",
     "system.elements.muffler": "approximate",
-    "system.routes": "approximate"
+    "system.routes": "approximate",
+    "fabrication.clearance_zones": "approximate"
   },
   "engine": {
     "label": "M274 DE20 AL",
@@ -160,5 +161,8 @@
     { "id": "304", "name": "AISI 304 austenitic stainless", "family": "austenitic_stainless", "density_kg_m3": 8000.0, "conductivity_w_mk": 16.2, "emissivity": 0.6 },
     { "id": "321", "name": "AISI 321 austenitic stainless", "family": "austenitic_stainless", "density_kg_m3": 8000.0, "conductivity_w_mk": 16.1, "emissivity": 0.6 },
     { "id": "ti-gr5", "name": "Titanium Grade 5 (Ti-6Al-4V)", "family": "titanium", "density_kg_m3": 4430.0, "conductivity_w_mk": 6.7, "emissivity": 0.5 }
-  ]
+  ],
+  "fabrication": {
+    "clearance_zones": [{ "name": "rear axle", "x_min_mm": -2800.0, "x_max_mm": -2400.0, "clearance_mm": 40.0 }]
+  }
 }

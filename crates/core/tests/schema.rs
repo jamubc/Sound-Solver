@@ -2,9 +2,11 @@
 //! from the project types and from everything the app backend sends its frontend.
 //! Regenerate with `UPDATE_SCHEMA=1 cargo test -p exhaust-core --test schema`.
 
+use exhaust_core::fabricate::Package;
 use exhaust_core::layout::Layout;
 use exhaust_core::manifest::Manifest;
 use exhaust_core::project::Project;
+use exhaust_core::scan::Clearance;
 use exhaust_core::solve::{PointOutcome, SweepResult};
 use schemars::{JsonSchema, Schema};
 
@@ -17,6 +19,8 @@ struct Api {
     sweep: SweepResult,
     /// One operating point as a time-domain sweep streams it.
     point: PointOutcome,
+    fabrication: Package,
+    clearance: Clearance,
 }
 
 fn check(file: &str, schema: Schema) {

@@ -28,6 +28,8 @@ pub struct RouteLayout {
     pub pieces: Vec<PieceLayout>,
     /// Centreline length: the flow solver's x-axis along this route.
     pub length_mm: f64,
+    /// Hanger positions on the centreline.
+    pub hangers: Vec<Vec3>,
 }
 
 /// A piece of centreline starting `s0_mm` along its route.
@@ -75,7 +77,7 @@ pub struct Frustum {
 }
 
 /// Outer shell of welded cans without a shell parameter, mm.
-const CAN_WALL_MM: f64 = 1.2;
+pub(crate) const CAN_WALL_MM: f64 = 1.2;
 
 pub fn layout(project: &Project) -> Result<Layout> {
     let routes = project
@@ -129,6 +131,11 @@ pub fn layout(project: &Project) -> Result<Layout> {
                 bend_radius_mm: radii.iter().map(|r| r * 1e3).collect(),
                 pieces,
                 length_mm: line.length * 1e3,
+                hangers: r
+                    .hangers_mm
+                    .iter()
+                    .map(|s| mm(line.point_at(s * 1e-3)))
+                    .collect(),
             })
         })
         .collect::<Result<Vec<_>>>()?;

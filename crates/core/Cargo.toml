@@ -15,3 +15,10 @@ serde = { version = "1.0.229", features = ["derive"] }
 serde_json = "1.0.151"
 thiserror = "2.0.21"
 toml = "1.1.6"
+truck-modeling = "0.6"
+truck-stepio = { version = "0.3", default-features = false }
+
+[dev-dependencies]
+# Reads exported STEP back in the tests.
+ruststep = "0.4"
+truck-stepio = "0.3"

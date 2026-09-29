@@ -4,6 +4,12 @@
   "description": "The app backend's replies, for generating the frontend's types.",
   "type": "object",
   "properties": {
+    "clearance": {
+      "$ref": "#/$defs/Clearance"
+    },
+    "fabrication": {
+      "$ref": "#/$defs/Package"
+    },
     "layout": {
       "$ref": "#/$defs/Layout"
     },
@@ -25,9 +31,99 @@
     "layout",
     "manifests",
     "sweep",
-    "point"
+    "point",
+    "fabrication",
+    "clearance"
   ],
   "$defs": {
+    "Clearance": {
+      "type": "object",
+      "properties": {
+        "contacts": {
+          "description": "Stretches closer than the gap wanted there.",
+          "type": "array",
+          "items": {
+            "$ref": "#/$defs/Contact"
+          }
+        },
+        "placement": {
+          "$ref": "#/$defs/Placement"
+        },
+        "routes": {
+          "description": "Closest approach of each route.",
+          "type": "array",
+          "items": {
+            "$ref": "#/$defs/RouteClearance"
+          }
+        }
+      },
+      "required": [
+        "placement",
+        "routes",
+        "contacts"
+      ]
+    },
+    "Contact": {
+      "description": "A stretch of pipe closer to the underbody than wanted.",
+      "type": "object",
+      "properties": {
+        "at": {
+          "description": "Where it is closest, on the centreline and on the scan.",
+          "type": "array",
+          "items": {
+            "type": "number",
+            "format": "double"
+          },
+          "maxItems": 3,
+          "minItems": 3
+        },
+        "from_mm": {
+          "description": "Along the centreline from the route's start, mm.",
+          "type": "number",
+          "format": "double"
+        },
+        "min_mm": {
+          "type": "number",
+          "format": "double"
+        },
+        "route": {
+          "type": "string"
+        },
+        "scan_point": {
+          "type": "array",
+          "items": {
+            "type": "number",
+            "format": "double"
+          },
+          "maxItems": 3,
+          "minItems": 3
+        },
+        "to_mm": {
+          "type": "number",
+          "format": "double"
+        },
+        "wanted_mm": {
+          "type": "number",
+          "format": "double"
+        },
+        "zone": {
+          "description": "The clearance zone that set the gap, if one did.",
+          "type": [
+            "string",
+            "null"
+          ]
+        }
+      },
+      "required": [
+        "route",
+        "from_mm",
+        "to_mm",
+        "min_mm",
+        "wanted_mm",
+        "at",
+        "scan_point"
+      ]
+    },
     "DroneReport": {
       "type": "object",
       "properties": {
@@ -218,6 +314,16 @@
         "d_to_mm"
       ]
     },
+    "Joint": {
+      "description": "How two parts are joined.",
+      "type": "string",
+      "enum": [
+        "butt",
+        "slip",
+        "v_band",
+        "flange"
+      ]
+    },
     "Layout": {
       "type": "object",
       "properties": {
@@ -380,6 +486,42 @@
         "firing_order"
       ]
     },
+    "Package": {
+      "type": "object",
+      "properties": {
+        "routes": {
+          "type": "array",
+          "items": {
+            "$ref": "#/$defs/RouteParts"
+          }
+        },
+        "sticks": {
+          "description": "Straights nested into stock lengths.",
+          "type": "array",
+          "items": {
+            "$ref": "#/$defs/Stick"
+          }
+        },
+        "warnings": {
+          "type": "array",
+          "items": {
+            "type": "string"
+          }
+        },
+        "welds": {
+          "type": "array",
+          "items": {
+            "$ref": "#/$defs/Weld"
+          }
+        }
+      },
+      "required": [
+        "routes",
+        "sticks",
+        "welds",
+        "warnings"
+      ]
+    },
     "Param": {
       "type": "object",
       "properties": {
@@ -455,6 +597,160 @@
           "description": "Offsets from a port, mm, one per extra port.",
           "type": "string",
           "const": "offsets"
+        }
+      ]
+    },
+    "Part": {
+      "oneOf": [
+        {
+          "type": "object",
+          "properties": {
+            "from": {
+              "description": "What each end is welded or joined to.",
+              "type": "string"
+            },
+            "hangers_mm": {
+              "description": "Hangers, mm from this straight's start.",
+              "type": "array",
+              "items": {
+                "type": "number",
+                "format": "double"
+              }
+            },
+            "id": {
+              "type": "string"
+            },
+            "kind": {
+              "type": "string",
+              "const": "straight"
+            },
+            "length_mm": {
+              "type": "number",
+              "format": "double"
+            },
+            "to": {
+              "type": "string"
+            }
+          },
+          "required": [
+            "kind",
+            "id",
+            "length_mm",
+            "from",
+            "to",
+            "hangers_mm"
+          ]
+        },
+        {
+          "type": "object",
+          "properties": {
+            "angle_deg": {
+              "type": "number",
+              "format": "double"
+            },
+            "clr_mm": {
+              "type": "number",
+              "format": "double"
+            },
+            "hangers_mm": {
+              "description": "Hangers, mm of arc from this bend's start.",
+              "type": "array",
+              "items": {
+                "type": "number",
+                "format": "double"
+              }
+            },
+            "id": {
+              "type": "string"
+            },
+            "kind": {
+              "type": "string",
+              "const": "bend"
+            },
+            "rotation_deg": {
+              "description": "From the previous bend's plane; absent for a route's first bend.",
+              "type": [
+                "number",
+                "null"
+              ],
+              "format": "double"
+            },
+            "stock_as_is": {
+              "description": "Used whole: no cut.",
+              "type": "boolean"
+            },
+            "stock_deg": {
+              "description": "Stock bend it is cut from, degrees.",
+              "type": "number",
+              "format": "double"
+            },
+            "turns_toward": {
+              "description": "Direction the tube turns toward (first bend's placement), unit vector.",
+              "type": "array",
+              "items": {
+                "type": "number",
+                "format": "double"
+              },
+              "maxItems": 3,
+              "minItems": 3
+            }
+          },
+          "required": [
+            "kind",
+            "id",
+            "angle_deg",
+            "clr_mm",
+            "stock_deg",
+            "stock_as_is",
+            "turns_toward",
+            "hangers_mm"
+          ]
+        },
+        {
+          "description": "A tube off the main pipe (a stub, a Helmholtz neck), one end coped to saddle the main\npipe. Cut to `length_mm` (its long side); the cope reaches `saddle_mm` below the crown,\nwhere the branch axis leaves the main pipe's outer wall and the modelled length starts.",
+          "type": "object",
+          "properties": {
+            "from": {
+              "type": "string"
+            },
+            "id": {
+              "type": "string"
+            },
+            "kind": {
+              "type": "string",
+              "const": "branch"
+            },
+            "length_mm": {
+              "type": "number",
+              "format": "double"
+            },
+            "main_od_mm": {
+              "description": "The main pipe the cope fits, and the angle from its flow direction to the branch.",
+              "type": "number",
+              "format": "double"
+            },
+            "saddle_mm": {
+              "type": "number",
+              "format": "double"
+            },
+            "tee_angle_deg": {
+              "type": "number",
+              "format": "double"
+            },
+            "to": {
+              "type": "string"
+            }
+          },
+          "required": [
+            "kind",
+            "id",
+            "length_mm",
+            "saddle_mm",
+            "main_od_mm",
+            "tee_angle_deg",
+            "from",
+            "to"
+          ]
         }
       ]
     },
@@ -556,6 +852,45 @@
             "angle_deg"
           ]
         }
+      ]
+    },
+    "Placement": {
+      "description": "Rigid transform `x ↦ R x + t`.",
+      "type": "object",
+      "properties": {
+        "residual_mm": {
+          "description": "RMS distance between the reference points as placed and as given, mm.",
+          "type": "number",
+          "format": "double"
+        },
+        "rotation": {
+          "type": "array",
+          "items": {
+            "type": "array",
+            "items": {
+              "type": "number",
+              "format": "double"
+            },
+            "maxItems": 3,
+            "minItems": 3
+          },
+          "maxItems": 3,
+          "minItems": 3
+        },
+        "translation": {
+          "type": "array",
+          "items": {
+            "type": "number",
+            "format": "double"
+          },
+          "maxItems": 3,
+          "minItems": 3
+        }
+      },
+      "required": [
+        "rotation",
+        "translation",
+        "residual_mm"
       ]
     },
     "PointOutcome": {
@@ -791,6 +1126,37 @@
         "warnings"
       ]
     },
+    "RouteClearance": {
+      "type": "object",
+      "properties": {
+        "at": {
+          "type": "array",
+          "items": {
+            "type": "number",
+            "format": "double"
+          },
+          "maxItems": 3,
+          "minItems": 3
+        },
+        "at_mm": {
+          "type": "number",
+          "format": "double"
+        },
+        "min_mm": {
+          "type": "number",
+          "format": "double"
+        },
+        "route": {
+          "type": "string"
+        }
+      },
+      "required": [
+        "route",
+        "min_mm",
+        "at_mm",
+        "at"
+      ]
+    },
     "RouteLayout": {
       "type": "object",
       "properties": {
@@ -800,6 +1166,19 @@
           "items": {
             "type": "number",
             "format": "double"
+          }
+        },
+        "hangers": {
+          "description": "Hanger positions on the centreline.",
+          "type": "array",
+          "items": {
+            "type": "array",
+            "items": {
+              "type": "number",
+              "format": "double"
+            },
+            "maxItems": 3,
+            "minItems": 3
           }
         },
         "id": {
@@ -849,7 +1228,78 @@
         "points",
         "bend_radius_mm",
         "pieces",
-        "length_mm"
+        "length_mm",
+        "hangers"
+      ]
+    },
+    "RouteParts": {
+      "description": "The parts of a route, or of an element's own tube (`stub/tube`, `helmholtz/neck`,\n`helmholtz/can`), from its start.",
+      "type": "object",
+      "properties": {
+        "end": {
+          "type": "array",
+          "items": {
+            "type": "number",
+            "format": "double"
+          },
+          "maxItems": 3,
+          "minItems": 3
+        },
+        "length_mm": {
+          "description": "Centreline length.",
+          "type": "number",
+          "format": "double"
+        },
+        "material": {
+          "type": "string"
+        },
+        "od_mm": {
+          "type": "number",
+          "format": "double"
+        },
+        "parts": {
+          "type": "array",
+          "items": {
+            "$ref": "#/$defs/Part"
+          }
+        },
+        "route": {
+          "type": "string"
+        },
+        "start": {
+          "type": "array",
+          "items": {
+            "type": "number",
+            "format": "double"
+          },
+          "maxItems": 3,
+          "minItems": 3
+        },
+        "start_direction": {
+          "description": "Flow direction at the start.",
+          "type": "array",
+          "items": {
+            "type": "number",
+            "format": "double"
+          },
+          "maxItems": 3,
+          "minItems": 3
+        },
+        "wall_mm": {
+          "type": "number",
+          "format": "double"
+        }
+      },
+      "required": [
+        "route",
+        "od_mm",
+        "wall_mm",
+        "material",
+        "start",
+        "start_direction",
+        "end",
+        "length_mm",
+        "parts"
       ]
     },
     "SolverKind": {
@@ -858,6 +1308,45 @@
       "enum": [
         "time_domain",
         "four_pole"
+      ]
+    },
+    "Stick": {
+      "description": "One stock length of tube and the straights cut from it.",
+      "type": "object",
+      "properties": {
+        "cuts": {
+          "type": "array",
+          "items": {
+            "type": "string"
+          }
+        },
+        "material": {
+          "type": "string"
+        },
+        "od_mm": {
+          "type": "number",
+          "format": "double"
+        },
+        "offcut_mm": {
+          "type": "number",
+          "format": "double"
+        },
+        "used_mm": {
+          "type": "number",
+          "format": "double"
+        },
+        "wall_mm": {
+          "type": "number",
+          "format": "double"
+        }
+      },
+      "required": [
+        "material",
+        "od_mm",
+        "wall_mm",
+        "cuts",
+        "used_mm",
+        "offcut_mm"
       ]
     },
     "SweepResult": {
@@ -938,6 +1427,52 @@
         "cycles",
         "periodicity_residual",
         "periodicity_tolerance"
+      ]
+    },
+    "Weld": {
+      "type": "object",
+      "properties": {
+        "at": {
+          "type": "array",
+          "items": {
+            "type": "number",
+            "format": "double"
+          },
+          "maxItems": 3,
+          "minItems": 3
+        },
+        "between": {
+          "description": "The two things joined (part ids or `element.port`).",
+          "type": "array",
+          "items": {
+            "type": "string"
+          },
+          "maxItems": 2,
+          "minItems": 2
+        },
+        "id": {
+          "type": "string"
+        },
+        "joint": {
+          "$ref": "#/$defs/Joint"
+        },
+        "note": {
+          "description": "Filler or method needed for the metals meeting here.",
+          "type": [
+            "string",
+            "null"
+          ]
+        },
+        "route": {
+          "type": "string"
+        }
+      },
+      "required": [
+        "id",
+        "route",
+        "joint",
+        "between",
+        "at"
       ]
     }
   }
