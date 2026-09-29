@@ -1,0 +1,97 @@
+<script lang="ts">
+  import { onMount } from 'svelte';
+  import { backend } from './lib/backend';
+  import Plots from './lib/Plots.svelte';
+  import Properties from './lib/Properties.svelte';
+  import { app, load } from './lib/state.svelte';
+  import Toolbar from './lib/Toolbar.svelte';
+  import Tree from './lib/Tree.svelte';
+  import Viewport from './lib/Viewport.svelte';
+
+  let unavailable = $state<string | null>(null);
+
+  onMount(async () => {
+    try {
+      app.manifests = await backend.manifests();
+      load(await backend.stockProject(), null);
+    } catch (e) {
+      unavailable = String(e);
+    }
+  });
+</script>
+
+<div class="shell">
+  <Toolbar />
+  <div class="banners">
+    {#if unavailable}
+      <div class="banner bad">Solver backend unavailable: {unavailable}</div>
+    {/if}
+    {#if app.invalid}
+      <div class="banner warn" data-testid="invalid">Not solvable as edited: {app.invalid}</div>
+    {/if}
+  </div>
+  <aside class="side">
+    <Tree />
+    <Properties />
+  </aside>
+  <main class="view">
+    <Viewport />
+  </main>
+  <section class="plots">
+    <Plots />
+  </section>
+</div>
+
+<style>
+  .shell {
+    display: grid;
+    grid-template-columns: 300px minmax(0, 1fr) 560px;
+    grid-template-rows: auto auto minmax(0, 1fr);
+    grid-template-areas:
+      'top top top'
+      'banner banner banner'
+      'side view plots';
+    height: 100%;
+  }
+
+  .banners {
+    grid-area: banner;
+  }
+
+  .banner {
+    padding: 6px 12px;
+    border-bottom: 1px solid var(--line);
+  }
+
+  .banner.bad {
+    background: #3a1d22;
+  }
+
+  .banner.warn {
+    background: #3a321d;
+  }
+
+  .side {
+    grid-area: side;
+    display: flex;
+    flex-direction: column;
+    min-height: 0;
+    border-right: 1px solid var(--line);
+    background: var(--panel);
+  }
+
+  .view {
+    grid-area: view;
+    min-width: 0;
+    min-height: 0;
+    position: relative;
+  }
+
+  .plots {
+    grid-area: plots;
+    min-height: 0;
+    overflow-y: auto;
+    border-left: 1px solid var(--line);
+    background: var(--panel);
+  }
+</style>

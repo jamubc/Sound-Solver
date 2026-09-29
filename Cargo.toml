@@ -1,6 +1,8 @@
 [workspace]
 resolver = "3"
-members = ["crates/core", "crates/cli"]
+members = ["crates/core", "crates/cli", "app/src-tauri"]
+# The app embeds its built frontend (app/dist), so plain `cargo` commands leave it out.
+default-members = ["crates/core", "crates/cli"]
 
 [workspace.package]
 version = "0.1.0"

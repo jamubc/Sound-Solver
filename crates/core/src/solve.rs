@@ -20,7 +20,7 @@
 use rayon::prelude::*;
 use rustfft::num_complex::Complex64;
 use schemars::JsonSchema;
-use serde::Serialize;
+use serde::{Deserialize, Serialize};
 
 use crate::engine::{EvoState, Load, estimate_evo_state};
 use crate::error::{Error, Result};
@@ -38,7 +38,7 @@ const P_REF: f64 = 20e-6;
 const R_AIR: f64 = 287.05;
 
 /// Which solver produced a result.
-#[derive(Clone, Copy, Debug, PartialEq, Eq, Serialize, JsonSchema)]
+#[derive(Clone, Copy, Debug, PartialEq, Eq, Serialize, Deserialize, JsonSchema)]
 #[serde(rename_all = "snake_case")]
 pub enum SolverKind {
     TimeDomain,
@@ -46,7 +46,7 @@ pub enum SolverKind {
 }
 
 /// Where the in-cylinder state at EVO came from.
-#[derive(Clone, Debug, PartialEq, Serialize, JsonSchema)]
+#[derive(Clone, Debug, PartialEq, Serialize, Deserialize, JsonSchema)]
 #[serde(tag = "kind", rename_all = "snake_case")]
 pub enum EvoSource {
     /// Ideal Otto-cycle estimate at this manifold pressure.
@@ -56,7 +56,7 @@ pub enum EvoSource {
 }
 
 /// How a result was produced; attached to every result.
-#[derive(Clone, Debug, PartialEq, Serialize, JsonSchema)]
+#[derive(Clone, Debug, PartialEq, Serialize, Deserialize, JsonSchema)]
 pub struct Provenance {
     pub solver: SolverKind,
     pub core_version: String,
@@ -88,7 +88,7 @@ impl Provenance {
 }
 
 /// Scheme and convergence of a time-domain run.
-#[derive(Clone, Debug, PartialEq, Serialize, JsonSchema)]
+#[derive(Clone, Debug, PartialEq, Serialize, Deserialize, JsonSchema)]
 pub struct TimeDomainRun {
     pub cfl: f64,
     pub cfl_max: f64,
@@ -104,7 +104,7 @@ pub struct TimeDomainRun {
 }
 
 /// One spectral line at the receiver.
-#[derive(Clone, Debug, PartialEq, Serialize, JsonSchema)]
+#[derive(Clone, Debug, PartialEq, Serialize, Deserialize, JsonSchema)]
 pub struct Line {
     pub frequency_hz: f64,
     /// Engine order (multiples of ½ for a four-stroke).
@@ -116,7 +116,7 @@ pub struct Line {
 }
 
 /// Solution at one engine speed.
-#[derive(Clone, Debug, PartialEq, Serialize, JsonSchema)]
+#[derive(Clone, Debug, PartialEq, Serialize, Deserialize, JsonSchema)]
 pub struct PointResult {
     pub rpm: f64,
     pub provenance: Provenance,
@@ -136,7 +136,7 @@ pub struct PointResult {
 }
 
 /// A point either solved or failed; failures carry the reason and no numbers.
-#[derive(Clone, Debug, Serialize, JsonSchema)]
+#[derive(Clone, Debug, Serialize, Deserialize, JsonSchema)]
 #[serde(tag = "status", rename_all = "snake_case")]
 pub enum PointOutcome {
     Solved(Box<PointResult>),
