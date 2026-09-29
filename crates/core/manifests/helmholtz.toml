@@ -1,0 +1,45 @@
+type = "helmholtz"
+name = "Helmholtz resonator"
+summary = "Neck and cavity teed onto the main pipe; resonance f0 = (c/2π)√(S_n/(V l_eff))."
+ports = ["in", "out"]
+
+[[param]]
+key = "neck_id_mm"
+label = "Neck bore"
+kind = "number"
+unit = "mm"
+min = 5.0
+max = 200.0
+default = 35.0
+
+[[param]]
+key = "neck_length_mm"
+label = "Neck length"
+kind = "number"
+unit = "mm"
+min = 5.0
+max = 1000.0
+default = 80.0
+
+[[param]]
+key = "volume_l"
+label = "Cavity volume"
+kind = "number"
+unit = "L"
+min = 0.05
+max = 100.0
+default = 3.0
+
+[[param]]
+key = "cavity_diameter_mm"
+label = "Cavity diameter"
+kind = "number"
+unit = "mm"
+min = 20.0
+max = 600.0
+default = 150.0
+
+[[param]]
+key = "direction"
+label = "Branch direction"
+kind = "direction"

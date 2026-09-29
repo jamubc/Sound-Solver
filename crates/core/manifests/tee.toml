@@ -1,0 +1,9 @@
+type = "tee"
+name = "T or Y junction"
+summary = "Three pipes meeting at one pressure (Benson constant-pressure junction); bores come from the connected pipes."
+ports = ["in", "out", "branch"]
+
+[[param]]
+key = "branch_direction"
+label = "Branch direction"
+kind = "direction"

@@ -1,0 +1,4 @@
+type = "cap"
+name = "Cap"
+summary = "Closed pipe end."
+ports = ["in"]

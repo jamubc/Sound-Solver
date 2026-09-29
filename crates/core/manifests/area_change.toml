@@ -1,0 +1,13 @@
+type = "area_change"
+name = "Area change"
+summary = "Joins two pipes of different bore: sudden at zero taper length, otherwise a cone of that length. Bores come from the connected pipes."
+ports = ["in", "out"]
+
+[[param]]
+key = "taper_length_mm"
+label = "Taper length"
+kind = "number"
+unit = "mm"
+min = 0.0
+max = 1000.0
+default = 0.0

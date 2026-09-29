@@ -1,0 +1,54 @@
+type = "expansion_chamber"
+name = "Expansion chamber"
+summary = "Reactive muffler: a shell of larger bore, optionally with the inlet and outlet tubes extending into it; extra outlets for multi-outlet mufflers."
+ports = ["in", "out"]
+
+[[param]]
+key = "diameter_mm"
+label = "Shell inner diameter"
+kind = "number"
+unit = "mm"
+min = 40.0
+max = 600.0
+default = 150.0
+
+[[param]]
+key = "length_mm"
+label = "Length"
+kind = "number"
+unit = "mm"
+min = 20.0
+max = 2000.0
+default = 300.0
+
+[[param]]
+key = "inlet_extension_mm"
+label = "Inlet tube extension"
+kind = "number"
+unit = "mm"
+min = 0.0
+max = 1000.0
+default = 0.0
+
+[[param]]
+key = "outlet_extension_mm"
+label = "Outlet tube extension"
+kind = "number"
+unit = "mm"
+min = 0.0
+max = 1000.0
+default = 0.0
+
+[[param]]
+key = "shell_mm"
+label = "Shell thickness"
+kind = "number"
+unit = "mm"
+min = 0.5
+max = 10.0
+default = 1.2
+
+[[param]]
+key = "extra_outlets_mm"
+label = "Extra outlets (offsets from out)"
+kind = "offsets"

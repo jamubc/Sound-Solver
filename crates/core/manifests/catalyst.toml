@@ -1,0 +1,58 @@
+type = "catalyst"
+name = "Catalyst"
+summary = "Square-channel monolith brick in a can with cones: laminar channel friction and entrance loss, porous flow resistance only (no chemistry)."
+ports = ["in", "out"]
+
+[[param]]
+key = "cpsi"
+label = "Cell density"
+kind = "number"
+unit = "cells/in²"
+min = 50.0
+max = 1500.0
+default = 400.0
+
+[[param]]
+key = "cell_wall_mm"
+label = "Cell wall"
+kind = "number"
+unit = "mm"
+min = 0.02
+max = 0.5
+default = 0.1651
+
+[[param]]
+key = "brick_length_mm"
+label = "Brick length"
+kind = "number"
+unit = "mm"
+min = 10.0
+max = 500.0
+default = 100.0
+
+[[param]]
+key = "brick_diameter_mm"
+label = "Brick diameter"
+kind = "number"
+unit = "mm"
+min = 30.0
+max = 400.0
+default = 100.0
+
+[[param]]
+key = "inlet_cone_mm"
+label = "Inlet cone length"
+kind = "number"
+unit = "mm"
+min = 0.0
+max = 500.0
+default = 0.0
+
+[[param]]
+key = "outlet_cone_mm"
+label = "Outlet cone length"
+kind = "number"
+unit = "mm"
+min = 0.0
+max = 500.0
+default = 0.0

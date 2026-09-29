@@ -7,6 +7,7 @@ pub mod fourpole;
 pub mod gas;
 pub mod gas1d;
 pub mod geometry;
+pub mod manifest;
 pub mod math;
 pub mod metrics;
 pub mod model;

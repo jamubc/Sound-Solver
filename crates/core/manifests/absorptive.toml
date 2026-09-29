@@ -1,0 +1,76 @@
+type = "absorptive"
+name = "Absorptive muffler"
+summary = "Straight-through perforated tube of the pipe bore in a cylindrical case; the annulus packed with fibre, or empty (concentric-tube resonator)."
+ports = ["in", "out"]
+
+[[param]]
+key = "case_diameter_mm"
+label = "Case inner diameter"
+kind = "number"
+unit = "mm"
+min = 30.0
+max = 600.0
+default = 130.0
+
+[[param]]
+key = "length_mm"
+label = "Length"
+kind = "number"
+unit = "mm"
+min = 20.0
+max = 2000.0
+default = 400.0
+
+[[param]]
+key = "open_area_ratio"
+label = "Perforate open-area ratio"
+kind = "number"
+unit = "1"
+min = 0.01
+max = 0.5
+default = 0.2
+
+[[param]]
+key = "hole_diameter_mm"
+label = "Hole diameter"
+kind = "number"
+unit = "mm"
+min = 0.5
+max = 20.0
+default = 3.5
+
+[[param]]
+key = "perforate_thickness_mm"
+label = "Perforated tube wall"
+kind = "number"
+unit = "mm"
+min = 0.2
+max = 5.0
+default = 1.0
+
+[[param]]
+key = "fill_density_kg_m3"
+label = "Packing density (0: empty)"
+kind = "number"
+unit = "kg/m³"
+min = 0.0
+max = 400.0
+default = 100.0
+
+[[param]]
+key = "fiber_diameter_um"
+label = "Fibre diameter"
+kind = "number"
+unit = "µm"
+min = 3.0
+max = 50.0
+default = 12.0
+
+[[param]]
+key = "shell_mm"
+label = "Case thickness"
+kind = "number"
+unit = "mm"
+min = 0.5
+max = 10.0
+default = 1.2

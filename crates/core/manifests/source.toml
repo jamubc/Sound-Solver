@@ -1,0 +1,4 @@
+type = "source"
+name = "Engine and turbine"
+summary = "Single-zone exhaust-valve source through the manifolds and turbine; port out is the downpipe flange face. Parameters live in the project's engine and turbine sections."
+ports = ["out"]

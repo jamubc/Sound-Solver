@@ -1,0 +1,4 @@
+type = "outlet"
+name = "Tailpipe tip"
+summary = "Unflanged open end radiating to atmosphere (Levine–Schwinger); the bore comes from the connected pipe."
+ports = ["in"]

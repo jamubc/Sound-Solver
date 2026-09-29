@@ -15,6 +15,7 @@ use crate::engine::{EngineGeometry, EvoState, ExhaustValves};
 use crate::error::{Error, Result};
 use crate::gas1d::Limiter;
 use crate::geometry::{Vec3, add, scale, unit};
+use crate::manifest;
 
 /// Current project schema version.
 pub const SCHEMA_VERSION: u32 = 1;
@@ -436,80 +437,41 @@ impl Element {
         })
     }
 
-    /// Physical consistency of the element's parameters.
+    /// Physical consistency of the element's parameters: each number within its manifest's
+    /// range (`manifest`), then the relations between them.
     pub fn validate(&self, project: &Project) -> Result<()> {
         let bad = |msg: &str| Err(Error::invalid(format!("element '{}': {msg}", self.id)));
-        match &self.kind {
-            ElementKind::AreaChange { taper_length_mm } if *taper_length_mm < 0.0 => {
-                bad("taper length must be ≥ 0")
-            }
-            ElementKind::ExpansionChamber(c) => {
-                if c.diameter_mm <= 0.0 || c.shell_mm <= 0.0 {
-                    return bad("diameter and shell must be > 0");
+        let value = serde_json::to_value(&self.kind).expect("elements serialise");
+        let kind = value["type"].as_str().unwrap_or_default();
+        let m = manifest::get(kind).expect("every element type has a manifest");
+        for p in &m.params {
+            if let (Some(lo), Some(hi)) = (p.min, p.max) {
+                // Fields left out of the file take their serde default, which is the manifest's.
+                let x = value[&p.key].as_f64().or(p.default);
+                if !x.is_some_and(|x| (lo..=hi).contains(&x)) {
+                    let unit = p.unit.as_deref().unwrap_or_default();
+                    return bad(&format!("{} must be {lo}–{hi} {unit}", p.label));
                 }
-                if c.inlet_extension_mm < 0.0
-                    || c.outlet_extension_mm < 0.0
-                    || c.inlet_extension_mm + c.outlet_extension_mm >= c.length_mm
-                {
-                    return bad("tube extensions must be ≥ 0 and leave part of the chamber open");
+            }
+        }
+        match &self.kind {
+            ElementKind::ExpansionChamber(c) => {
+                if c.inlet_extension_mm + c.outlet_extension_mm >= c.length_mm {
+                    return bad("tube extensions must leave part of the chamber open");
                 }
                 if !c.extra_outlets_mm.is_empty() && c.outlet_extension_mm > 0.0 {
                     return bad("outlet extensions are modelled for single-outlet chambers only");
                 }
                 Ok(())
             }
-            ElementKind::QuarterWaveStub(s) => {
-                if s.id_mm <= 0.0 || s.wall_mm <= 0.0 || s.length_mm <= 0.0 {
-                    return bad("stub bore, wall and length must be > 0");
-                }
-                if project.material(&s.material).is_none() {
-                    return bad("unknown stub material");
-                }
-                Ok(())
+            ElementKind::QuarterWaveStub(s) if project.material(&s.material).is_none() => {
+                bad("unknown stub material")
             }
-            ElementKind::Helmholtz(h) => {
-                if h.neck_id_mm <= 0.0 || h.neck_length_mm <= 0.0 || h.volume_l <= 0.0 {
-                    return bad("neck bore, neck length and volume must be > 0");
-                }
-                if h.cavity_diameter_mm <= h.neck_id_mm {
-                    return bad("cavity must be wider than the neck");
-                }
-                Ok(())
+            ElementKind::Helmholtz(h) if h.cavity_diameter_mm <= h.neck_id_mm => {
+                bad("cavity must be wider than the neck")
             }
-            ElementKind::Catalyst(c) => {
-                let pitch = 25.4 / c.cpsi.sqrt();
-                if !(50.0..=1500.0).contains(&c.cpsi)
-                    || c.cell_wall_mm <= 0.0
-                    || c.cell_wall_mm >= 0.5 * pitch
-                {
-                    return bad("cpsi must be 50–1500 and the cell wall under half the cell pitch");
-                }
-                if c.brick_length_mm <= 0.0
-                    || c.brick_diameter_mm <= 0.0
-                    || c.inlet_cone_mm < 0.0
-                    || c.outlet_cone_mm < 0.0
-                {
-                    return bad("brick size must be > 0 and cone lengths ≥ 0");
-                }
-                Ok(())
-            }
-            ElementKind::Valve(v) if !(0.0..=90.0).contains(&v.angle_deg) => {
-                bad("valve angle must be 0–90°")
-            }
-            ElementKind::Absorptive(a) => {
-                if a.case_diameter_mm <= 0.0 || a.length_mm <= 0.0 || a.shell_mm <= 0.0 {
-                    return bad("case diameter, length and shell must be > 0");
-                }
-                if !(0.01..=0.5).contains(&a.open_area_ratio)
-                    || a.hole_diameter_mm <= 0.0
-                    || a.perforate_thickness_mm <= 0.0
-                {
-                    return bad("open-area ratio must be 1–50 % and holes and wall > 0");
-                }
-                if !(0.0..500.0).contains(&a.fill_density_kg_m3) || a.fiber_diameter_um <= 0.0 {
-                    return bad("fill density must be 0–500 kg/m³ and fibre diameter > 0");
-                }
-                Ok(())
+            ElementKind::Catalyst(c) if c.cell_wall_mm >= 0.5 * 25.4 / c.cpsi.sqrt() => {
+                bad("the cell wall must be under half the cell pitch")
             }
             _ => Ok(()),
         }

@@ -1,0 +1,41 @@
+type = "quarter_wave_stub"
+name = "Quarter-wave stub"
+summary = "Closed side branch teed onto the main pipe; notch near c/(4L) with the branch's own gas temperature."
+ports = ["in", "out"]
+
+[[param]]
+key = "id_mm"
+label = "Bore"
+kind = "number"
+unit = "mm"
+min = 10.0
+max = 200.0
+default = 50.0
+
+[[param]]
+key = "wall_mm"
+label = "Wall"
+kind = "number"
+unit = "mm"
+min = 0.5
+max = 10.0
+default = 1.5
+
+[[param]]
+key = "length_mm"
+label = "Length"
+kind = "number"
+unit = "mm"
+min = 10.0
+max = 3000.0
+default = 500.0
+
+[[param]]
+key = "material"
+label = "Material"
+kind = "material"
+
+[[param]]
+key = "direction"
+label = "Branch direction"
+kind = "direction"

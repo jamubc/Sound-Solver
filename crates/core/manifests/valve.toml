@@ -1,0 +1,13 @@
+type = "valve"
+name = "Butterfly valve"
+summary = "Electric cutout or exhaust flap: an orifice whose loss follows Idelchik's butterfly-valve data against disc angle."
+ports = ["in", "out"]
+
+[[param]]
+key = "angle_deg"
+label = "Disc opening (0 closed, 90 open)"
+kind = "number"
+unit = "°"
+min = 0.0
+max = 90.0
+default = 90.0
