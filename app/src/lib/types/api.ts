@@ -144,6 +144,37 @@ export type SolverKind = "time_domain" | "four_pole";
  */
 export type Limiter = "minmod" | "van_leer" | "van_leer_tvb";
 /**
+ * Where a value comes from, in order of precedence.
+ *
+ * This interface was referenced by `Api`'s JSON-Schema
+ * via the `definition` "Provenance2".
+ */
+export type Provenance2 = "measured" | "published" | "derived" | "estimated";
+/**
+ * How far a value may be from the truth.
+ *
+ * This interface was referenced by `Api`'s JSON-Schema
+ * via the `definition` "Uncertainty".
+ */
+export type Uncertainty =
+  | {
+      high: number;
+      kind: "range";
+      low: number;
+    }
+  | {
+      fraction: number;
+      kind: "relative";
+    }
+  | {
+      kind: "absolute";
+      plus_minus: number;
+    }
+  | {
+      factor: number;
+      kind: "factor";
+    };
+/**
  * Who hears the scene. Positions are in the vehicle frame (X forward, Y left, Z up, origin at
  * the downpipe flange), mm.
  *
@@ -701,8 +732,20 @@ export interface RenderInfo {
    */
   channels: string[];
   core_version: string;
+  /**
+   * Of those, how many take their class's default range.
+   */
+  default_ranges: number;
   dx_mm: number;
+  /**
+   * Inputs estimated or derived.
+   */
+  estimated: number;
   gas_table: string;
+  /**
+   * Every recorded input with its provenance, source and range.
+   */
+  inputs: InputUse[];
   /**
    * Equivalent continuous level of each channel, dB re 20 µPa.
    */
@@ -743,6 +786,31 @@ export interface Band {
   reasons: string[];
   resolved: boolean;
   upper_hz: number;
+}
+/**
+ * A recorded input as a result reports it.
+ *
+ * This interface was referenced by `Api`'s JSON-Schema
+ * via the `definition` "InputUse".
+ */
+export interface InputUse {
+  /**
+   * The range is its class's default, not a stated one.
+   */
+  default_range: boolean;
+  path: string;
+  provenance: Provenance2;
+  /**
+   * The range in force.
+   */
+  range?: Uncertainty | null;
+  source: string;
+  /**
+   * The value in use.
+   */
+  value: {
+    [k: string]: unknown;
+  };
 }
 /**
  * Where the grid-refinement check ran.

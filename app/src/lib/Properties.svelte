@@ -1,6 +1,6 @@
 <script lang="ts">
   import { addHanger, addVia, inline, placeElement, removeElement, removeVia, setHangers, spot, straights } from './actions.svelte';
-  import { fromShown, JOINT, lengthUnit, mm, od, shown, toShown } from './format';
+  import { describeInput, fromShown, JOINT, lengthUnit, mm, od, shown, toShown } from './format';
   import Section from './Section.svelte';
   import { app, edit, editFabrication, manifestOf } from './state.svelte';
   import Tune from './Tune.svelte';
@@ -19,7 +19,7 @@
   );
   const route = $derived(app.project?.system.routes.find((r) => r.id === routeId));
   const manifest = $derived(element ? manifestOf(element.type) : undefined);
-  const basis = (path: string) => app.project?.basis?.[path];
+  const input = (path: string) => app.project?.inputs?.[path];
 
   const findElement = (p: Project, id: string) => p.system.elements.find((e) => e.id === id)!;
   const findRoute = (p: Project, id: string) => p.system.routes.find((r) => r.id === id)!;
@@ -87,8 +87,8 @@
   {#if element && manifest}
     <Section title={manifest.name}>
       <p class="muted">{manifest.summary}</p>
-      {#if basis(`system.elements.${element.id}`)}
-        <p class="basis">Values here are {basis(`system.elements.${element.id}`)}</p>
+      {#if input(`system.elements.${element.id}`)}
+        <p class="basis">Values here: {describeInput(input(`system.elements.${element.id}`)!)}</p>
       {/if}
       {#each manifest.param ?? [] as p (p.key)}
         {#if p.kind === 'number'}

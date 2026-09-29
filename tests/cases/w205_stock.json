@@ -1,37 +1,284 @@
 {
-  "schema_version": 1,
+  "schema_version": 2,
   "name": "W205 C300 stock exhaust (approximate)",
   "notes": "First model of the reference car. Layout, lengths and muffler internals are placeholders from forum measurements and owner inspection; replace with caliper, tape and thermocouple readings. The underfloor element is unverified (cat or resonator): modelled as a resonator chamber. The rear muffler is modelled as one expansion chamber with two outlets; its real internals and the vacuum flap (if fitted) are unknown.",
-  "basis": {
-    "engine.geometry.bore_mm": "published",
-    "engine.geometry.stroke_mm": "published",
-    "engine.geometry.compression_ratio": "published",
-    "engine.geometry.firing_order": "published",
-    "engine.geometry.rod_mm": "approximate",
-    "engine.valves.valves_per_cylinder": "published",
-    "engine.valves.valve_diameter_mm": "approximate",
-    "engine.valves.throat_diameter_mm": "approximate",
-    "engine.valves.discharge_coefficient": "approximate",
-    "engine.valves.evo_deg": "unknown",
-    "engine.valves.evc_deg": "unknown",
-    "engine.valves.max_lift_mm": "unknown",
-    "engine.polytropic_exponent": "approximate",
-    "turbine.extraction_factor": "unknown",
-    "turbine.scrolls": "approximate",
-    "turbine.scrolls.heat_loss_w_per_k": "approximate",
-    "operating.map_kpa": "approximate",
-    "operating.intake_temperature_k": "approximate",
-    "operating.volumetric_efficiency": "approximate",
-    "operating.heat_retained": "approximate",
-    "operating.cruise_band_rpm": "owner_set",
-    "ambient.vehicle_speed_kmh": "owner_set",
-    "ambient.underbody_air_factor": "approximate",
-    "ambient.ground_z_mm": "approximate",
-    "system.elements.cat": "approximate",
-    "system.elements.resonator": "unknown",
-    "system.elements.muffler": "approximate",
-    "system.routes": "approximate",
-    "fabrication.clearance_zones": "approximate"
+  "inputs": {
+    "engine.geometry.bore_mm": {
+      "provenance": "published",
+      "source": "Mercedes-Benz M274 DE20 AL specification"
+    },
+    "engine.geometry.stroke_mm": {
+      "provenance": "published",
+      "source": "Mercedes-Benz M274 DE20 AL specification"
+    },
+    "engine.geometry.compression_ratio": {
+      "provenance": "published",
+      "source": "Mercedes-Benz M274 DE20 AL specification"
+    },
+    "engine.geometry.firing_order": {
+      "provenance": "published",
+      "source": "in-line four, 1-3-4-2"
+    },
+    "engine.valves.valves_per_cylinder": {
+      "provenance": "published",
+      "source": "M274: four valves per cylinder, two exhaust"
+    },
+    "engine.geometry.rod_mm": {
+      "provenance": "estimated",
+      "source": "from memory; Heywood (1988) §2.2 gives rod length over crank radius l/a = 3 to 4 for small and medium engines, which on a 46 mm crank radius is 138–184 mm",
+      "uncertainty": {
+        "kind": "range",
+        "low": 138.0,
+        "high": 184.0
+      }
+    },
+    "engine.valves.valve_diameter_mm": {
+      "provenance": "estimated",
+      "source": "from memory; engineering reasoning: two exhaust valves beside two intake valves in an 83 mm bore leave exhaust heads of about 0.28–0.35 of the bore, 23–29 mm; replace with the head specification or a caliper reading",
+      "uncertainty": {
+        "kind": "range",
+        "low": 23.0,
+        "high": 29.0
+      }
+    },
+    "engine.valves.throat_diameter_mm": {
+      "provenance": "estimated",
+      "source": "from memory; engineering reasoning: the inner seat diameter is the head less twice the seat face and margin (1.0–2.0 mm each side), 0.83–0.90 of a 26 mm head",
+      "uncertainty": {
+        "kind": "range",
+        "low": 21.5,
+        "high": 23.5
+      }
+    },
+    "engine.valves.discharge_coefficient": {
+      "provenance": "estimated",
+      "source": "constant standing in for a lift-dependent curve; engineering reasoning: exhaust poppet-valve discharge coefficients referred to the smaller of curtain and throat area lie between about 0.55 and 0.75 over the lift event; replace with flow-bench data",
+      "uncertainty": {
+        "kind": "range",
+        "low": 0.55,
+        "high": 0.75
+      }
+    },
+    "engine.valves.evo_deg": {
+      "provenance": "estimated",
+      "source": "placeholder; SI exhaust valves typically open 40–60° before BDC (Heywood 1988, ch. 6), 120–140° after firing TDC, widened by ±10° for the M274 exhaust cam phaser, whose authority is not published",
+      "uncertainty": {
+        "kind": "range",
+        "low": 110.0,
+        "high": 150.0
+      }
+    },
+    "engine.valves.evc_deg": {
+      "provenance": "estimated",
+      "source": "placeholder; SI exhaust valves typically close 8–20° after TDC (Heywood 1988, ch. 6), 368–380° after firing TDC, widened by ±10° for the exhaust cam phaser",
+      "uncertainty": {
+        "kind": "range",
+        "low": 358.0,
+        "high": 390.0
+      }
+    },
+    "engine.valves.max_lift_mm": {
+      "provenance": "estimated",
+      "source": "placeholder; the input specification's rule L/D = 0.25–0.30 on a 26 mm head gives 6.5–7.8 mm; the 8 mm in use came from memory, so the range is kept wide enough to hold it",
+      "uncertainty": {
+        "kind": "range",
+        "low": 6.5,
+        "high": 9.0
+      }
+    },
+    "engine.polytropic_exponent": {
+      "provenance": "estimated",
+      "source": "engineering reasoning: burned gas at 1100–1500 K has γ ≈ 1.28–1.33 (the gas table); heat loss to the walls during blowdown lowers the exponent below γ",
+      "uncertainty": {
+        "kind": "range",
+        "low": 1.25,
+        "high": 1.33
+      }
+    },
+    "turbine.extraction_factor": {
+      "provenance": "estimated",
+      "source": "placeholder; engineering reasoning: small automotive turbines reach total-to-static efficiencies of about 0.6–0.75 at their best points and less under pulsating flow and with the wastegate open",
+      "uncertainty": {
+        "kind": "range",
+        "low": 0.3,
+        "high": 0.75
+      }
+    },
+    "turbine.scrolls.manifold_volume_l": {
+      "provenance": "estimated",
+      "source": "from memory; engineering reasoning: ports, runners and one scroll of a twin-scroll housing on a 2.0 L four, ±30 % until measured by water fill",
+      "uncertainty": {
+        "kind": "relative",
+        "fraction": 0.3
+      }
+    },
+    "turbine.scrolls.nozzle_area_cm2": {
+      "provenance": "estimated",
+      "source": "placeholder; effective nozzle area with wastegate is not published for this turbocharger; a factor of 1.5 either way is an engineering judgment until a turbine map is supplied",
+      "uncertainty": {
+        "kind": "factor",
+        "factor": 1.5
+      }
+    },
+    "turbine.scrolls.heat_loss_w_per_k": {
+      "provenance": "estimated",
+      "source": "from memory; engineering reasoning: a coolant-jacketed integrated manifold, a factor of 2 either way",
+      "uncertainty": {
+        "kind": "factor",
+        "factor": 2.0
+      }
+    },
+    "turbine.coolant_temperature_k": {
+      "provenance": "estimated",
+      "source": "engineering reasoning: coolant after the thermostat, 85–100 °C in normal running",
+      "uncertainty": {
+        "kind": "range",
+        "low": 358.0,
+        "high": 373.0
+      }
+    },
+    "operating.map_kpa": {
+      "provenance": "estimated",
+      "source": "from memory; engineering reasoning: road-load cruise of a 2.0 L turbocharged engine sits near 45–65 kPa manifold pressure",
+      "uncertainty": {
+        "kind": "relative",
+        "fraction": 0.2
+      }
+    },
+    "operating.intake_temperature_k": {
+      "provenance": "estimated",
+      "source": "engineering reasoning: intercooled charge air at part load lies between ambient and about 40 K above it",
+      "uncertainty": {
+        "kind": "range",
+        "low": 298.0,
+        "high": 333.0
+      }
+    },
+    "operating.volumetric_efficiency": {
+      "provenance": "estimated",
+      "source": "engineering reasoning: four-valve SI engines at mid speed breathe 0.8–0.95 of the manifold density (Heywood 1988, ch. 6)",
+      "uncertainty": {
+        "kind": "range",
+        "low": 0.8,
+        "high": 0.95
+      }
+    },
+    "operating.heat_retained": {
+      "provenance": "estimated",
+      "source": "engineering reasoning: combustion efficiency 0.95–0.98 times one less the wall heat loss during combustion and expansion to EVO, 10–25 % of the fuel energy",
+      "uncertainty": {
+        "kind": "range",
+        "low": 0.65,
+        "high": 0.85
+      }
+    },
+    "operating.n_compression": {
+      "provenance": "estimated",
+      "source": "engineering reasoning: polytropic compression of the fresh charge with wall heat transfer, 1.28–1.36",
+      "uncertainty": {
+        "kind": "range",
+        "low": 1.28,
+        "high": 1.36
+      }
+    },
+    "operating.n_expansion": {
+      "provenance": "estimated",
+      "source": "engineering reasoning: polytropic expansion of burned gas from TDC to EVO, below γ ≈ 1.3 through heat loss, 1.25–1.33",
+      "uncertainty": {
+        "kind": "range",
+        "low": 1.25,
+        "high": 1.33
+      }
+    },
+    "operating.lhv_mj_per_kg": {
+      "provenance": "published",
+      "source": "lower heating value of gasoline, 43 MJ/kg (Heywood 1988, Appendix D)"
+    },
+    "gas.lambda": {
+      "provenance": "estimated",
+      "source": "engineering reasoning: a three-way-catalyst engine holds λ = 1 at cruise; full-load enrichment is outside this operating point",
+      "uncertainty": {
+        "kind": "range",
+        "low": 0.98,
+        "high": 1.02
+      }
+    },
+    "ambient.underbody_air_factor": {
+      "provenance": "estimated",
+      "source": "engineering reasoning: air speed in the underbody gap as a fraction of vehicle speed, the pipes sitting in the underbody boundary layer",
+      "uncertainty": {
+        "kind": "range",
+        "low": 0.3,
+        "high": 0.8
+      }
+    },
+    "ambient.ground_z_mm": {
+      "provenance": "estimated",
+      "source": "from memory; engineering reasoning: the downpipe flange sits 0.6–0.7 m above the road; measure with a tape",
+      "uncertainty": {
+        "kind": "range",
+        "low": -700.0,
+        "high": -600.0
+      }
+    },
+    "system.elements.cat.cpsi": {
+      "provenance": "estimated",
+      "source": "substrate fallback of the input specification: 600 cpsi (400–900)",
+      "uncertainty": {
+        "kind": "range",
+        "low": 400.0,
+        "high": 900.0
+      }
+    },
+    "system.elements.cat.cell_wall_mm": {
+      "provenance": "estimated",
+      "source": "substrate fallback of the input specification: 2–4 mil; 3 mil in use",
+      "uncertainty": {
+        "kind": "range",
+        "low": 0.0508,
+        "high": 0.1016
+      }
+    },
+    "system.elements.cat": {
+      "provenance": "estimated",
+      "source": "can dimensions from memory; ±10 % until measured",
+      "uncertainty": {
+        "kind": "relative",
+        "fraction": 0.1
+      }
+    },
+    "system.elements.resonator": {
+      "provenance": "estimated",
+      "source": "unverified element (catalyst or resonator), modelled as a resonator chamber; ±30 % on its dimensions until inspected",
+      "uncertainty": {
+        "kind": "relative",
+        "fraction": 0.3
+      }
+    },
+    "system.elements.muffler": {
+      "provenance": "estimated",
+      "source": "shell from owner inspection; internals unknown and modelled as one chamber with two outlets, so its acoustic size is uncertain beyond the shell: ±20 %",
+      "uncertainty": {
+        "kind": "relative",
+        "fraction": 0.2
+      }
+    },
+    "system.routes": {
+      "provenance": "estimated",
+      "source": "lengths and diameters from forum measurements and owner inspection; ±5 % until measured with a tape (within 1 %)",
+      "uncertainty": {
+        "kind": "relative",
+        "fraction": 0.05
+      }
+    },
+    "fabrication.clearance_zones": {
+      "provenance": "estimated",
+      "source": "rear-axle zone from owner inspection",
+      "uncertainty": {
+        "kind": "relative",
+        "fraction": 0.1
+      }
+    }
   },
   "engine": {
     "label": "M274 DE20 AL",

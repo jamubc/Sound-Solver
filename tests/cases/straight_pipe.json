@@ -1,29 +1,88 @@
 {
-  "schema_version": 1,
+  "schema_version": 2,
   "name": "M274 into a plain 2.5 in / 2.75 in pipe",
   "notes": "Grid-convergence and smoke-test case: M274 source, downpipe with one bend, sudden-free conical reducer, straight mid-pipe to one unflanged tip. No catalyst or muffler.",
-  "basis": {
-    "engine.geometry.bore_mm": "published",
-    "engine.geometry.stroke_mm": "published",
-    "engine.geometry.compression_ratio": "published",
-    "engine.geometry.firing_order": "published",
-    "engine.geometry.rod_mm": "approximate",
-    "engine.valves.valves_per_cylinder": "published",
-    "engine.valves.valve_diameter_mm": "approximate",
-    "engine.valves.throat_diameter_mm": "approximate",
-    "engine.valves.discharge_coefficient": "approximate",
-    "engine.valves.evo_deg": "unknown",
-    "engine.valves.evc_deg": "unknown",
-    "engine.valves.max_lift_mm": "unknown",
-    "engine.polytropic_exponent": "approximate",
-    "turbine.extraction_factor": "unknown",
-    "turbine.scrolls": "approximate",
-    "operating.map_kpa": "approximate",
-    "operating.intake_temperature_k": "approximate",
-    "operating.volumetric_efficiency": "approximate",
-    "operating.heat_retained": "approximate",
-    "operating.cruise_band_rpm": "owner_set",
-    "ambient.ground_z_mm": "approximate"
+  "inputs": {
+    "engine.geometry.bore_mm": {
+      "provenance": "published",
+      "source": "published specification"
+    },
+    "engine.geometry.stroke_mm": {
+      "provenance": "published",
+      "source": "published specification"
+    },
+    "engine.geometry.compression_ratio": {
+      "provenance": "published",
+      "source": "published specification"
+    },
+    "engine.geometry.firing_order": {
+      "provenance": "published",
+      "source": "published specification"
+    },
+    "engine.geometry.rod_mm": {
+      "provenance": "estimated",
+      "source": "from memory or forum measurements"
+    },
+    "engine.valves.valves_per_cylinder": {
+      "provenance": "published",
+      "source": "published specification"
+    },
+    "engine.valves.valve_diameter_mm": {
+      "provenance": "estimated",
+      "source": "from memory or forum measurements"
+    },
+    "engine.valves.throat_diameter_mm": {
+      "provenance": "estimated",
+      "source": "from memory or forum measurements"
+    },
+    "engine.valves.discharge_coefficient": {
+      "provenance": "estimated",
+      "source": "from memory or forum measurements"
+    },
+    "engine.valves.evo_deg": {
+      "provenance": "estimated",
+      "source": "placeholder: not known"
+    },
+    "engine.valves.evc_deg": {
+      "provenance": "estimated",
+      "source": "placeholder: not known"
+    },
+    "engine.valves.max_lift_mm": {
+      "provenance": "estimated",
+      "source": "placeholder: not known"
+    },
+    "engine.polytropic_exponent": {
+      "provenance": "estimated",
+      "source": "from memory or forum measurements"
+    },
+    "turbine.extraction_factor": {
+      "provenance": "estimated",
+      "source": "placeholder: not known"
+    },
+    "turbine.scrolls": {
+      "provenance": "estimated",
+      "source": "from memory or forum measurements"
+    },
+    "operating.map_kpa": {
+      "provenance": "estimated",
+      "source": "from memory or forum measurements"
+    },
+    "operating.intake_temperature_k": {
+      "provenance": "estimated",
+      "source": "from memory or forum measurements"
+    },
+    "operating.volumetric_efficiency": {
+      "provenance": "estimated",
+      "source": "from memory or forum measurements"
+    },
+    "operating.heat_retained": {
+      "provenance": "estimated",
+      "source": "from memory or forum measurements"
+    },
+    "ambient.ground_z_mm": {
+      "provenance": "estimated",
+      "source": "from memory or forum measurements"
+    }
   },
   "engine": {
     "label": "M274 DE20 AL",

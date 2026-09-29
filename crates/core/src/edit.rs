@@ -191,7 +191,7 @@ pub fn remove(project: &mut Project, id: &str) -> Result<()> {
     edited.system.routes[a] = joined;
     edited.system.routes.remove(b);
     edited.system.elements.retain(|e| e.id != id);
-    edited.basis.remove(&format!("system.elements.{id}"));
+    edited.inputs.remove(&format!("system.elements.{id}"));
     edited.validate()?;
     *project = edited;
     Ok(())

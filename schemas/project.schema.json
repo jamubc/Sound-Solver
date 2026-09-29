@@ -6,14 +6,6 @@
     "ambient": {
       "$ref": "#/$defs/Ambient"
     },
-    "basis": {
-      "description": "Origin of each value, keyed by dotted field path (e.g. `engine.geometry.bore_mm`).\nThe UI shows the label next to the value; unlisted values are user input.",
-      "type": "object",
-      "additionalProperties": {
-        "$ref": "#/$defs/Basis"
-      },
-      "default": {}
-    },
     "engine": {
       "$ref": "#/$defs/EngineSpec"
     },
@@ -28,6 +20,14 @@
     },
     "gas": {
       "$ref": "#/$defs/GasSpec"
+    },
+    "inputs": {
+      "description": "Provenance, source and range of recorded inputs, keyed by dotted field path (e.g.\n`engine.geometry.bore_mm`, or `system.elements.cat` for a whole element; `inputs`).\nUnrecorded values are the user's own entries.",
+      "type": "object",
+      "additionalProperties": {
+        "$ref": "#/$defs/Input"
+      },
+      "default": {}
     },
     "materials": {
       "type": "array",
@@ -80,6 +80,37 @@
     "materials"
   ],
   "$defs": {
+    "Alternative": {
+      "description": "A value an input has had from another source.",
+      "type": "object",
+      "properties": {
+        "provenance": {
+          "$ref": "#/$defs/Provenance"
+        },
+        "source": {
+          "type": "string"
+        },
+        "uncertainty": {
+          "anyOf": [
+            {
+              "$ref": "#/$defs/Uncertainty"
+            },
+            {
+              "type": "null"
+            }
+          ]
+        },
+        "value": {
+          "description": "The field's value from this source, in the field's own form."
+        }
+      },
+      "additionalProperties": false,
+      "required": [
+        "value",
+        "provenance",
+        "source"
+      ]
+    },
     "Ambient": {
       "type": "object",
       "properties": {
@@ -114,36 +145,6 @@
         "temperature_k",
         "vehicle_speed_kmh",
         "ground_z_mm"
-      ]
-    },
-    "Basis": {
-      "description": "Where a value comes from.",
-      "oneOf": [
-        {
-          "description": "Manufacturer or standard publication.",
-          "type": "string",
-          "const": "published"
-        },
-        {
-          "description": "From memory or forum measurements; replace with a measurement.",
-          "type": "string",
-          "const": "approximate"
-        },
-        {
-          "description": "Measured on the vehicle by the owner.",
-          "type": "string",
-          "const": "measured"
-        },
-        {
-          "description": "Chosen by the owner.",
-          "type": "string",
-          "const": "owner_set"
-        },
-        {
-          "description": "Not known; a placeholder the results depend on.",
-          "type": "string",
-          "const": "unknown"
-        }
       ]
     },
     "CabinTf": {
@@ -836,6 +837,47 @@
         "lambda"
       ]
     },
+    "Input": {
+      "description": "The recorded origin of one input.",
+      "type": "object",
+      "properties": {
+        "alternatives": {
+          "description": "Values this input has had from other sources.",
+          "type": "array",
+          "items": {
+            "$ref": "#/$defs/Alternative"
+          }
+        },
+        "chosen": {
+          "description": "The user chose the value in the field over alternatives of higher precedence.",
+          "type": "boolean"
+        },
+        "provenance": {
+          "description": "Provenance of the value in the field.",
+          "$ref": "#/$defs/Provenance"
+        },
+        "source": {
+          "description": "File, citation, or estimation method.",
+          "type": "string"
+        },
+        "uncertainty": {
+          "description": "Stated range; absent: the default range of the input's class.",
+          "anyOf": [
+            {
+              "$ref": "#/$defs/Uncertainty"
+            },
+            {
+              "type": "null"
+            }
+          ]
+        }
+      },
+      "additionalProperties": false,
+      "required": [
+        "provenance",
+        "source"
+      ]
+    },
     "Joint": {
       "description": "How two parts are joined.",
       "type": "string",
@@ -1075,6 +1117,31 @@
       "required": [
         "element",
         "port"
+      ]
+    },
+    "Provenance": {
+      "description": "Where a value comes from, in order of precedence.",
+      "oneOf": [
+        {
+          "description": "Measured on the vehicle or its parts.",
+          "type": "string",
+          "const": "measured"
+        },
+        {
+          "description": "A manufacturer's specification, a standard, or a cited publication.",
+          "type": "string",
+          "const": "published"
+        },
+        {
+          "description": "Computed from other inputs.",
+          "type": "string",
+          "const": "derived"
+        },
+        {
+          "description": "Estimated: memory, forum figures, a placeholder, or a rule of thumb.",
+          "type": "string",
+          "const": "estimated"
+        }
       ]
     },
     "Receiver": {
@@ -1426,6 +1493,92 @@
       "required": [
         "extraction_factor",
         "scrolls"
+      ]
+    },
+    "Uncertainty": {
+      "description": "How far a value may be from the truth.",
+      "oneOf": [
+        {
+          "description": "Anywhere in `[low, high]`, in the field's unit.",
+          "type": "object",
+          "properties": {
+            "high": {
+              "type": "number",
+              "format": "double"
+            },
+            "kind": {
+              "type": "string",
+              "const": "range"
+            },
+            "low": {
+              "type": "number",
+              "format": "double"
+            }
+          },
+          "additionalProperties": false,
+          "required": [
+            "kind",
+            "low",
+            "high"
+          ]
+        },
+        {
+          "description": "Within ± `fraction` of the value.",
+          "type": "object",
+          "properties": {
+            "fraction": {
+              "type": "number",
+              "format": "double"
+            },
+            "kind": {
+              "type": "string",
+              "const": "relative"
+            }
+          },
+          "additionalProperties": false,
+          "required": [
+            "kind",
+            "fraction"
+          ]
+        },
+        {
+          "description": "Within ± `plus_minus` of the value, in the field's unit.",
+          "type": "object",
+          "properties": {
+            "kind": {
+              "type": "string",
+              "const": "absolute"
+            },
+            "plus_minus": {
+              "type": "number",
+              "format": "double"
+            }
+          },
+          "additionalProperties": false,
+          "required": [
+            "kind",
+            "plus_minus"
+          ]
+        },
+        {
+          "description": "Between the value / `factor` and the value × `factor`.",
+          "type": "object",
+          "properties": {
+            "factor": {
+              "type": "number",
+              "format": "double"
+            },
+            "kind": {
+              "type": "string",
+              "const": "factor"
+            }
+          },
+          "additionalProperties": false,
+          "required": [
+            "kind",
+            "factor"
+          ]
+        }
       ]
     },
     "WallThermal": {

@@ -53,6 +53,14 @@ fn checked_in_schemas_match_types() {
     check("api.schema.json", schemars::schema_for!(Api));
 }
 
+/// Every recorded input of the reference car resolves to a field and states its range.
+#[test]
+fn reference_car_inputs_are_complete() {
+    let text = include_str!("../../../tests/cases/w205_stock.json");
+    let project = Project::from_json(text).unwrap();
+    assert_eq!(project.input_warnings(), Vec::<String>::new());
+}
+
 #[test]
 fn reference_cases_parse_and_round_trip() {
     let dir = concat!(env!("CARGO_MANIFEST_DIR"), "/../../tests/cases");

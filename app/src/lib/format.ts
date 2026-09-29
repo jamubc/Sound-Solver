@@ -1,6 +1,7 @@
 // Display formatting. The project holds lengths in millimetres; they show in millimetres or
 // inches (`app.inches`), pipe diameters always in both.
 import { app } from './state.svelte';
+import type { Input, Uncertainty } from './types/project';
 
 const MM_PER_IN = 25.4;
 
@@ -37,3 +38,32 @@ export const JOINT: Record<string, string> = { butt: 'butt weld', slip: 'slip jo
 export const ORDER_COLOURS = ['#9aa6b8', '#ff9f43', '#6aa9ff', '#5fd08a', '#c792ea', '#f5c451', '#ff6b6b', '#4fd1c5'];
 
 export const fileName = (path: string) => path.split(/[\\/]/).pop() ?? path;
+
+/** A range for people: "1.2–1.4", "±5 %", "±10", "×0.5–×2". */
+export function describeRange(u: Uncertainty): string {
+  return u.kind === 'range'
+    ? `${u.low}–${u.high}`
+    : u.kind === 'relative'
+      ? `±${+(100 * u.fraction).toFixed(3)} %`
+      : u.kind === 'absolute'
+        ? `±${u.plus_minus}`
+        : `×${+(1 / u.factor).toFixed(3)}–×${u.factor}`;
+}
+
+/** A recorded input for people: provenance, the stated range or "default range", and its source. */
+export function describeInput(input: Input): string {
+  const u = input.uncertainty;
+  const range = u
+    ? describeRange(u)
+    : input.provenance === 'estimated' || input.provenance === 'derived'
+      ? 'default range for its class'
+      : 'no range stated';
+  return `${input.provenance}, ${range}: ${input.source}`;
+}
+
+/** Dot class of a recorded input: its provenance, or `default` for an estimate on its class's default range. */
+export function inputClass(input: Input): string {
+  return !input.uncertainty && (input.provenance === 'estimated' || input.provenance === 'derived')
+    ? 'default'
+    : input.provenance;
+}

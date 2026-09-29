@@ -15,10 +15,11 @@ use crate::engine::{EngineGeometry, EvoState, ExhaustValves};
 use crate::error::{Error, Result};
 use crate::gas1d::Limiter;
 use crate::geometry::{Vec3, add, scale, unit};
+use crate::inputs::{Input, value_at};
 use crate::manifest;
 
 /// Current project schema version.
-pub const SCHEMA_VERSION: u32 = 1;
+pub const SCHEMA_VERSION: u32 = 2;
 
 #[derive(Clone, Debug, PartialEq, Serialize, Deserialize, JsonSchema)]
 #[serde(deny_unknown_fields)]
@@ -27,10 +28,11 @@ pub struct Project {
     pub name: String,
     #[serde(default, skip_serializing_if = "String::is_empty")]
     pub notes: String,
-    /// Origin of each value, keyed by dotted field path (e.g. `engine.geometry.bore_mm`).
-    /// The UI shows the label next to the value; unlisted values are user input.
+    /// Provenance, source and range of recorded inputs, keyed by dotted field path (e.g.
+    /// `engine.geometry.bore_mm`, or `system.elements.cat` for a whole element; `inputs`).
+    /// Unrecorded values are the user's own entries.
     #[serde(default)]
-    pub basis: BTreeMap<String, Basis>,
+    pub inputs: BTreeMap<String, Input>,
     pub engine: EngineSpec,
     pub turbine: TurbineSpec,
     pub gas: GasSpec,
@@ -129,22 +131,6 @@ pub enum CabinTfMethod {
     OrderRatio,
     /// Impulse response: clap or balloon at the tailpipe, phone at the driver's ear.
     Impulse,
-}
-
-/// Where a value comes from.
-#[derive(Clone, Copy, Debug, PartialEq, Eq, Serialize, Deserialize, JsonSchema)]
-#[serde(rename_all = "snake_case")]
-pub enum Basis {
-    /// Manufacturer or standard publication.
-    Published,
-    /// From memory or forum measurements; replace with a measurement.
-    Approximate,
-    /// Measured on the vehicle by the owner.
-    Measured,
-    /// Chosen by the owner.
-    OwnerSet,
-    /// Not known; a placeholder the results depend on.
-    Unknown,
 }
 
 #[derive(Clone, Debug, PartialEq, Serialize, Deserialize, JsonSchema)]
@@ -738,12 +724,12 @@ impl Project {
     }
 
     /// BLAKE3 hash of the canonical JSON without the data no solved point depends on (name,
-    /// notes, bases; the sweep and cruise band; measurements; fabrication: stock, scan,
+    /// notes, input records; the sweep and cruise band; measurements; fabrication: stock, scan,
     /// hangers, joints); keys result caches and provenance.
     pub fn hash(&self) -> String {
         let mut solved = self.clone();
         (solved.name, solved.notes) = (String::new(), String::new());
-        solved.basis.clear();
+        solved.inputs.clear();
         (solved.operating.sweep_rpm, solved.operating.cruise_band_rpm) = ([0.0; 3], [0.0; 2]);
         solved.fabrication = Fabrication::default();
         solved.measurements = Measurements::default();
@@ -796,6 +782,19 @@ impl Project {
                     .flatten()
                     .unwrap_or(1.5 * route.pipe.od_mm)
                     * 1e-3
+            })
+            .collect()
+    }
+
+    /// What is wrong with the recorded inputs without stopping a solve: defaulted ranges,
+    /// ranges that cannot apply, records of fields the project does not have.
+    pub fn input_warnings(&self) -> Vec<String> {
+        let value = serde_json::to_value(self).expect("projects serialise");
+        self.inputs
+            .iter()
+            .flat_map(|(path, input)| match value_at(&value, path) {
+                Some(v) => input.warnings(path, &v),
+                None => vec![format!("input {path}: the project has no such field")],
             })
             .collect()
     }
@@ -934,16 +933,48 @@ impl Project {
     }
 }
 
-/// Upgrades a project JSON value to [`SCHEMA_VERSION`]. Version 1 is the first; each future
-/// version adds one tested step here.
-pub fn migrate(value: serde_json::Value) -> Result<serde_json::Value> {
-    match value.get("schema_version").and_then(|v| v.as_u64()) {
-        Some(v) if v == SCHEMA_VERSION as u64 => Ok(value),
-        Some(v) => Err(Error::invalid(format!(
-            "unsupported project schema_version {v}"
-        ))),
-        None => Err(Error::invalid("project has no schema_version")),
+/// Upgrades a project JSON value to [`SCHEMA_VERSION`], one tested step per version.
+pub fn migrate(mut value: serde_json::Value) -> Result<serde_json::Value> {
+    loop {
+        match value.get("schema_version").and_then(|v| v.as_u64()) {
+            Some(v) if v == SCHEMA_VERSION as u64 => return Ok(value),
+            Some(1) => value = v1_to_v2(value),
+            Some(v) => {
+                return Err(Error::invalid(format!(
+                    "unsupported project schema_version {v}"
+                )));
+            }
+            None => return Err(Error::invalid("project has no schema_version")),
+        }
     }
+}
+
+/// Version 2 records inputs (`inputs`) where version 1 labelled their basis: published and
+/// measured keep their provenance, approximate and unknown values become estimates (with the
+/// default range of their class), and the owner's own settings go unrecorded, as the user's
+/// entries.
+fn v1_to_v2(mut value: serde_json::Value) -> serde_json::Value {
+    let project = value
+        .as_object_mut()
+        .expect("a versioned project is an object");
+    let basis = project.remove("basis").unwrap_or_default();
+    let mut inputs = serde_json::Map::new();
+    for (path, b) in basis.as_object().into_iter().flatten() {
+        let (provenance, source) = match b.as_str() {
+            Some("published") => ("published", "published specification"),
+            Some("measured") => ("measured", "measured on the vehicle"),
+            Some("approximate") => ("estimated", "from memory or forum measurements"),
+            Some("unknown") => ("estimated", "placeholder: not known"),
+            _ => continue,
+        };
+        inputs.insert(
+            path.clone(),
+            serde_json::json!({ "provenance": provenance, "source": source }),
+        );
+    }
+    project.insert("inputs".into(), inputs.into());
+    project.insert("schema_version".into(), 2.into());
+    value
 }
 
 /// Default material table (editable in the project). Room-temperature handbook values;
@@ -991,4 +1022,32 @@ pub fn default_materials() -> Vec<Material> {
             0.50,
         ),
     ]
+}
+
+#[cfg(test)]
+mod tests {
+    use super::*;
+
+    #[test]
+    fn version_1_bases_become_input_records() {
+        let v1 = serde_json::json!({
+            "schema_version": 1,
+            "basis": {
+                "engine.geometry.bore_mm": "published",
+                "engine.geometry.rod_mm": "approximate",
+                "engine.valves.evo_deg": "unknown",
+                "operating.cruise_band_rpm": "owner_set",
+            },
+        });
+        let v2 = migrate(v1).unwrap();
+        assert_eq!(v2["schema_version"], 2);
+        let inputs = v2["inputs"].as_object().unwrap();
+        assert_eq!(inputs.len(), 3);
+        assert_eq!(inputs["engine.geometry.bore_mm"]["provenance"], "published");
+        assert_eq!(inputs["engine.geometry.rod_mm"]["provenance"], "estimated");
+        assert_eq!(
+            inputs["engine.valves.evo_deg"]["source"],
+            "placeholder: not known"
+        );
+    }
 }

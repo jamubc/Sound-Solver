@@ -1,5 +1,6 @@
 <script lang="ts">
   import { onMount } from 'svelte';
+  import { describeRange } from './format';
   import Icon from './Icon.svelte';
   import { cancelRender, play, player, pointsOf, setVolume, soundingRpm, stop, type Which } from './player.svelte';
   import { app } from './state.svelte';
@@ -214,6 +215,25 @@
           {#each reasons as r}<li>{r}</li>{/each}
           {#each info.warnings as w}<li>{w}</li>{/each}
         </ul>
+        <details class="note" data-testid="render-inputs">
+          <summary>
+            estimated inputs: {info.estimated}{info.default_ranges ? `, ${info.default_ranges} on their class's default range` : ''}
+            · {info.inputs.length} recorded
+          </summary>
+          <table class="inputs mono">
+            <tbody>
+              {#each info.inputs as i}
+                <tr class:default={i.default_range}>
+                  <td>{i.path}</td>
+                  <td>{JSON.stringify(i.value).slice(0, 40)}</td>
+                  <td>{i.provenance}{i.default_range ? ' (default range)' : ''}</td>
+                  <td>{i.range ? describeRange(i.range) : ''}</td>
+                  <td class="muted">{i.source}</td>
+                </tr>
+              {/each}
+            </tbody>
+          </table>
+        </details>
         <p class="note muted mono">
           start {Math.round(info.start.rpm)} rpm, {info.start.map_kpa.toFixed(0)} kPa: {info.start.cycles} cycles, {info.start.converged
             ? 'converged'
@@ -380,6 +400,21 @@
   ul.note {
     margin: 4px 0;
     padding-left: 16px;
+  }
+
+  table.inputs {
+    border-collapse: collapse;
+    font-size: 10.5px;
+    margin: 4px 0;
+  }
+
+  table.inputs td {
+    padding: 1px 8px 1px 0;
+    vertical-align: top;
+  }
+
+  table.inputs tr.default td:nth-child(3) {
+    color: var(--bad);
   }
 
   .bad {

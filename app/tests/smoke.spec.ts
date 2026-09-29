@@ -78,6 +78,7 @@ test('a render is heard with every band labelled resolved or unresolved', async 
   await expect(bands.locator('span')).toHaveCount(34);
   await expect(bands.locator('span.resolved').first()).toBeVisible();
   await expect(listen).toContainText('cross-modes cut on');
+  await expect(listen.getByTestId('render-inputs')).toContainText('estimated inputs:');
   await listen.getByTestId('play').click();
   await expect(listen).toContainText('stopped');
   await page.screenshot({ path: 'test-results/render.png' });

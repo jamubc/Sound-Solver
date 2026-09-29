@@ -406,6 +406,46 @@
         "d_to_mm"
       ]
     },
+    "InputUse": {
+      "description": "A recorded input as a result reports it.",
+      "type": "object",
+      "properties": {
+        "default_range": {
+          "description": "The range is its class's default, not a stated one.",
+          "type": "boolean"
+        },
+        "path": {
+          "type": "string"
+        },
+        "provenance": {
+          "$ref": "#/$defs/Provenance2"
+        },
+        "range": {
+          "description": "The range in force.",
+          "anyOf": [
+            {
+              "$ref": "#/$defs/Uncertainty"
+            },
+            {
+              "type": "null"
+            }
+          ]
+        },
+        "source": {
+          "type": "string"
+        },
+        "value": {
+          "description": "The value in use."
+        }
+      },
+      "required": [
+        "path",
+        "value",
+        "provenance",
+        "source",
+        "default_range"
+      ]
+    },
     "Joint": {
       "description": "How two parts are joined.",
       "type": "string",
@@ -1474,6 +1514,31 @@
         "warnings"
       ]
     },
+    "Provenance2": {
+      "description": "Where a value comes from, in order of precedence.",
+      "oneOf": [
+        {
+          "description": "Measured on the vehicle or its parts.",
+          "type": "string",
+          "const": "measured"
+        },
+        {
+          "description": "A manufacturer's specification, a standard, or a cited publication.",
+          "type": "string",
+          "const": "published"
+        },
+        {
+          "description": "Computed from other inputs.",
+          "type": "string",
+          "const": "derived"
+        },
+        {
+          "description": "Estimated: memory, forum figures, a placeholder, or a rule of thumb.",
+          "type": "string",
+          "const": "estimated"
+        }
+      ]
+    },
     "Refinement": {
       "type": "object",
       "properties": {
@@ -1534,12 +1599,31 @@
         "core_version": {
           "type": "string"
         },
+        "default_ranges": {
+          "description": "Of those, how many take their class's default range.",
+          "type": "integer",
+          "format": "uint",
+          "minimum": 0
+        },
         "dx_mm": {
           "type": "number",
           "format": "double"
         },
+        "estimated": {
+          "description": "Inputs estimated or derived.",
+          "type": "integer",
+          "format": "uint",
+          "minimum": 0
+        },
         "gas_table": {
           "type": "string"
+        },
+        "inputs": {
+          "description": "Every recorded input with its provenance, source and range.",
+          "type": "array",
+          "items": {
+            "$ref": "#/$defs/InputUse"
+          }
         },
         "leq_db": {
           "description": "Equivalent continuous level of each channel, dB re 20 µPa.",
@@ -1614,6 +1698,9 @@
         "pre_roll_s",
         "refinement",
         "bands",
+        "inputs",
+        "estimated",
+        "default_ranges",
         "warnings"
       ]
     },
@@ -2113,6 +2200,92 @@
         "value",
         "branch_temperature_k",
         "basis"
+      ]
+    },
+    "Uncertainty": {
+      "description": "How far a value may be from the truth.",
+      "oneOf": [
+        {
+          "description": "Anywhere in `[low, high]`, in the field's unit.",
+          "type": "object",
+          "properties": {
+            "high": {
+              "type": "number",
+              "format": "double"
+            },
+            "kind": {
+              "type": "string",
+              "const": "range"
+            },
+            "low": {
+              "type": "number",
+              "format": "double"
+            }
+          },
+          "additionalProperties": false,
+          "required": [
+            "kind",
+            "low",
+            "high"
+          ]
+        },
+        {
+          "description": "Within ± `fraction` of the value.",
+          "type": "object",
+          "properties": {
+            "fraction": {
+              "type": "number",
+              "format": "double"
+            },
+            "kind": {
+              "type": "string",
+              "const": "relative"
+            }
+          },
+          "additionalProperties": false,
+          "required": [
+            "kind",
+            "fraction"
+          ]
+        },
+        {
+          "description": "Within ± `plus_minus` of the value, in the field's unit.",
+          "type": "object",
+          "properties": {
+            "kind": {
+              "type": "string",
+              "const": "absolute"
+            },
+            "plus_minus": {
+              "type": "number",
+              "format": "double"
+            }
+          },
+          "additionalProperties": false,
+          "required": [
+            "kind",
+            "plus_minus"
+          ]
+        },
+        {
+          "description": "Between the value / `factor` and the value × `factor`.",
+          "type": "object",
+          "properties": {
+            "factor": {
+              "type": "number",
+              "format": "double"
+            },
+            "kind": {
+              "type": "string",
+              "const": "factor"
+            }
+          },
+          "additionalProperties": false,
+          "required": [
+            "kind",
+            "factor"
+          ]
+        }
       ]
     },
     "Weld": {

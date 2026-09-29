@@ -30,6 +30,7 @@ use serde::{Deserialize, Serialize};
 use crate::error::{Error, Result};
 use crate::gas1d::{EvoSupply, Limiter, MapSchedule, Node};
 use crate::geometry::{Vec3, add, norm, scale, sub, unit};
+use crate::inputs::{InputUse, Provenance, summary};
 use crate::math::Trace;
 use crate::project::{CabinTf, Project};
 use crate::radiation::{Motion, listener_pressure};
@@ -134,6 +135,12 @@ pub struct RenderInfo {
     /// Where the grid-refinement check ran.
     pub refinement: Refinement,
     pub bands: Vec<Band>,
+    /// Every recorded input with its provenance, source and range.
+    pub inputs: Vec<InputUse>,
+    /// Inputs estimated or derived.
+    pub estimated: usize,
+    /// Of those, how many take their class's default range.
+    pub default_ranges: usize,
     pub warnings: Vec<String>,
 }
 
@@ -281,7 +288,14 @@ pub fn render(
     let bands = band_status(&st, &c_min, &mach_max, c0, &refined, rpm_f);
     let (cells, _, _) = grid_summary(&st.model.network);
     let mut warnings = st.model.warnings.clone();
+    warnings.extend(project.input_warnings());
     warnings.push("walls hold the thermal profile of the scene's start".into());
+    let inputs = summary(project);
+    let estimated = inputs
+        .iter()
+        .filter(|i| matches!(i.provenance, Provenance::Estimated | Provenance::Derived))
+        .count();
+    let default_ranges = inputs.iter().filter(|i| i.default_range).count();
     if matches!(scene.listener, Listener::PassBy { .. }) {
         warnings.push(format!(
             "air flow round the moving vehicle is not modelled; the thermal model takes \
@@ -329,6 +343,9 @@ pub fn render(
             fine_dx_mm: 0.5 * project.solver.dx_mm,
         },
         bands,
+        inputs,
+        estimated,
+        default_ranges,
         warnings,
     };
     Ok(Render {

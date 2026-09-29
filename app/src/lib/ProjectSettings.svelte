@@ -1,5 +1,5 @@
 <script lang="ts">
-  import { fromShown, lengthUnit, toShown } from './format';
+  import { describeInput, fromShown, inputClass, lengthUnit, toShown } from './format';
   import Section from './Section.svelte';
   import { app, edit } from './state.svelte';
   import type { Project } from './types/project';
@@ -7,8 +7,8 @@
   const p = $derived(app.project!);
   const outlets = $derived(p.system.elements.filter((e) => e.type === 'outlet'));
   const num = (e: Event) => Number((e.currentTarget as HTMLInputElement).value);
-  /** Where the value comes from, when the project says (published, approximate, unknown…). */
-  const basis = (path: string) => p.basis?.[path];
+  /** Where the value comes from, when the project records it. */
+  const input = (path: string) => p.inputs?.[path];
   const firingOrder = $derived(p.engine.geometry.firing_order.join('-'));
 
   function setFiringOrder(text: string) {
@@ -20,7 +20,7 @@
 {#snippet field(label: string, value: number, set: (q: Project, v: number) => void, unit: string, path = '', step = 'any')}
   <label class="field">
     <span class="label">
-      {#if path && basis(path)}<i class="dot {basis(path)}" title="This value is {basis(path)?.replace('_', ' ')}"></i>{/if}
+      {#if path && input(path)}<i class="dot {inputClass(input(path)!)}" title={describeInput(input(path)!)}></i>{/if}
       {label}
     </span>
     <input type="number" {step} {value} onchange={(e) => edit((q) => set(q, num(e)))} />
@@ -30,7 +30,7 @@
 
 <div class="settings" data-testid="project-settings">
   <div class="legend">
-    {#each [['published', 'published'], ['measured', 'measured'], ['owner_set', 'set by you'], ['approximate', 'approximate'], ['unknown', 'unknown']] as [b, name]}
+    {#each [['measured', 'measured'], ['published', 'published'], ['derived', 'derived'], ['estimated', 'estimated, range stated'], ['default', 'estimated, default range']] as [b, name]}
       <span><i class="dot {b}"></i>{name}</span>
     {/each}
   </div>
@@ -53,7 +53,9 @@
     {@render field('Heat retained', p.operating.heat_retained, (q, v) => (q.operating.heat_retained = v), '', 'operating.heat_retained')}
     <div class="table muted">
       Manifold pressure: {p.operating.map_kpa.map(([r, k]) => `${r} rpm ${k} kPa`).join(' · ')}
-      {#if basis('operating.map_kpa')}<span class="basis {basis('operating.map_kpa')}">{basis('operating.map_kpa')}</span>{/if}
+      {#if input('operating.map_kpa')}
+        <span class="basis {inputClass(input('operating.map_kpa')!)}" title={describeInput(input('operating.map_kpa')!)}>{input('operating.map_kpa')!.provenance}</span>
+      {/if}
     </div>
   </Section>
 
@@ -190,13 +192,13 @@
     text-transform: lowercase;
   }
 
-  .basis.approximate,
-  .basis.unknown {
+  .basis.estimated,
+  .basis.derived {
     border-color: #5a4a22;
     color: var(--warn);
   }
 
-  .basis.unknown {
+  .basis.default {
     border-color: #6a2e35;
     color: var(--bad);
   }
@@ -216,16 +218,20 @@
     background: var(--faint);
   }
 
-  .dot.approximate,
-  .dot.owner_set {
-    background: var(--warn);
+  .dot.published,
+  .dot.measured {
+    background: var(--good);
   }
 
-  .dot.owner_set {
+  .dot.derived {
     background: var(--accent);
   }
 
-  .dot.unknown {
+  .dot.estimated {
+    background: var(--warn);
+  }
+
+  .dot.default {
     background: var(--bad);
   }
 
