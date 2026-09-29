@@ -1,0 +1,933 @@
+{
+  "$schema": "https://json-schema.org/draft/2020-12/schema",
+  "title": "Api",
+  "description": "The app backend's replies, for generating the frontend's types.",
+  "type": "object",
+  "properties": {
+    "layout": {
+      "$ref": "#/$defs/Layout"
+    },
+    "manifests": {
+      "type": "array",
+      "items": {
+        "$ref": "#/$defs/Manifest"
+      }
+    },
+    "point": {
+      "description": "One operating point as a time-domain sweep streams it.",
+      "$ref": "#/$defs/PointOutcome"
+    },
+    "sweep": {
+      "$ref": "#/$defs/SweepResult"
+    }
+  },
+  "required": [
+    "layout",
+    "manifests",
+    "sweep",
+    "point"
+  ],
+  "$defs": {
+    "DroneReport": {
+      "type": "object",
+      "properties": {
+        "cruise_peak": {
+          "description": "Highest level in the cruise band, `[rpm, dB]`; `None` without points in the band.",
+          "type": [
+            "array",
+            "null"
+          ],
+          "items": {
+            "type": "number",
+            "format": "double"
+          },
+          "maxItems": 2,
+          "minItems": 2
+        },
+        "minus_3db_rpm": {
+          "description": "Speeds below and above the peak where the track is 3 dB down; `None` where it stays\nwithin 3 dB to the end of the sweep.",
+          "type": "array",
+          "items": {
+            "type": [
+              "number",
+              "null"
+            ],
+            "format": "double"
+          },
+          "maxItems": 2,
+          "minItems": 2
+        },
+        "peak_db": {
+          "type": "number",
+          "format": "double"
+        },
+        "peak_rpm": {
+          "type": "number",
+          "format": "double"
+        },
+        "track": {
+          "description": "Firing-order level per solved speed: `[rpm, dB]`.",
+          "type": "array",
+          "items": {
+            "type": "array",
+            "items": {
+              "type": "number",
+              "format": "double"
+            },
+            "maxItems": 2,
+            "minItems": 2
+          }
+        },
+        "unconverged_rpm": {
+          "description": "Speeds in the track whose time-domain run did not reach periodicity.",
+          "type": "array",
+          "items": {
+            "type": "number",
+            "format": "double"
+          }
+        }
+      },
+      "required": [
+        "track",
+        "peak_rpm",
+        "peak_db",
+        "minus_3db_rpm",
+        "unconverged_rpm"
+      ]
+    },
+    "ElementLayout": {
+      "type": "object",
+      "properties": {
+        "body": {
+          "description": "Outer envelope as coaxial frustums (cones and cylinders).",
+          "type": "array",
+          "items": {
+            "$ref": "#/$defs/Frustum"
+          }
+        },
+        "id": {
+          "type": "string"
+        },
+        "ports": {
+          "type": "array",
+          "items": {
+            "$ref": "#/$defs/PortLayout"
+          }
+        },
+        "type": {
+          "type": "string"
+        }
+      },
+      "required": [
+        "id",
+        "type",
+        "ports",
+        "body"
+      ]
+    },
+    "EvoSource": {
+      "description": "Where the in-cylinder state at EVO came from.",
+      "oneOf": [
+        {
+          "description": "Ideal Otto-cycle estimate at this manifold pressure.",
+          "type": "object",
+          "properties": {
+            "kind": {
+              "type": "string",
+              "const": "estimated"
+            },
+            "map_kpa": {
+              "type": "number",
+              "format": "double"
+            }
+          },
+          "required": [
+            "kind",
+            "map_kpa"
+          ]
+        },
+        {
+          "description": "`operating.evo_override`.",
+          "type": "object",
+          "properties": {
+            "kind": {
+              "type": "string",
+              "const": "given"
+            }
+          },
+          "required": [
+            "kind"
+          ]
+        }
+      ]
+    },
+    "EvoState": {
+      "description": "In-cylinder state at exhaust valve opening.",
+      "type": "object",
+      "properties": {
+        "pressure_pa": {
+          "description": "Pa.",
+          "type": "number",
+          "format": "double"
+        },
+        "temperature_k": {
+          "description": "K.",
+          "type": "number",
+          "format": "double"
+        }
+      },
+      "required": [
+        "pressure_pa",
+        "temperature_k"
+      ]
+    },
+    "Frustum": {
+      "type": "object",
+      "properties": {
+        "d_from_mm": {
+          "type": "number",
+          "format": "double"
+        },
+        "d_to_mm": {
+          "type": "number",
+          "format": "double"
+        },
+        "from": {
+          "type": "array",
+          "items": {
+            "type": "number",
+            "format": "double"
+          },
+          "maxItems": 3,
+          "minItems": 3
+        },
+        "to": {
+          "type": "array",
+          "items": {
+            "type": "number",
+            "format": "double"
+          },
+          "maxItems": 3,
+          "minItems": 3
+        }
+      },
+      "required": [
+        "from",
+        "to",
+        "d_from_mm",
+        "d_to_mm"
+      ]
+    },
+    "Layout": {
+      "type": "object",
+      "properties": {
+        "elements": {
+          "type": "array",
+          "items": {
+            "$ref": "#/$defs/ElementLayout"
+          }
+        },
+        "routes": {
+          "type": "array",
+          "items": {
+            "$ref": "#/$defs/RouteLayout"
+          }
+        }
+      },
+      "required": [
+        "routes",
+        "elements"
+      ]
+    },
+    "Limiter": {
+      "description": "TVD slope limiter for MUSCL reconstruction of primitive variables.",
+      "oneOf": [
+        {
+          "description": "`minmod(a, b)`: most dissipative TVD limiter.",
+          "type": "string",
+          "const": "minmod"
+        },
+        {
+          "description": "van Leer (1974): `2ab/(a + b)` when `ab > 0`.",
+          "type": "string",
+          "const": "van_leer"
+        },
+        {
+          "description": "van Leer with a TVB bound (Shu 1987): where both one-sided differences are below\n`gas1d::TVB_BOUND` of the local ρ, c or p the profile is treated as smooth and\nreconstructed unlimited with the third-order upwind-biased MUSCL κ = 1/3 formula;\nelsewhere (engine pulses, shocks, contact jumps) the van Leer limiter applies. Strict\nTVD limiters flatten every acoustic extremum; over 2 m of pipe at Δx = 15 mm and 19 cells\nper wavelength van Leer loses 10 dB at 1.2 kHz, this variant 2 dB (0.2 dB in exhaust gas).",
+          "type": "string",
+          "const": "van_leer_tvb"
+        }
+      ]
+    },
+    "Line": {
+      "description": "One spectral line at the receiver.",
+      "type": "object",
+      "properties": {
+        "frequency_hz": {
+          "type": "number",
+          "format": "double"
+        },
+        "order": {
+          "description": "Engine order (multiples of ½ for a four-stroke).",
+          "type": "number",
+          "format": "double"
+        },
+        "phase_rad": {
+          "description": "Phase of the receiver pressure, rad (`e^{jωt}`, t = 0 at cylinder 1 firing TDC).",
+          "type": "number",
+          "format": "double"
+        },
+        "spl_db": {
+          "type": "number",
+          "format": "double"
+        },
+        "spl_dba": {
+          "type": "number",
+          "format": "double"
+        }
+      },
+      "required": [
+        "frequency_hz",
+        "order",
+        "spl_db",
+        "spl_dba",
+        "phase_rad"
+      ]
+    },
+    "Manifest": {
+      "type": "object",
+      "properties": {
+        "name": {
+          "type": "string"
+        },
+        "param": {
+          "type": "array",
+          "default": [],
+          "items": {
+            "$ref": "#/$defs/Param"
+          }
+        },
+        "ports": {
+          "description": "Fixed ports; a chamber adds `out2`, `out3`, … for its extra outlets.",
+          "type": "array",
+          "items": {
+            "type": "string"
+          }
+        },
+        "summary": {
+          "type": "string"
+        },
+        "type": {
+          "description": "Element type, as in the project file.",
+          "type": "string"
+        }
+      },
+      "additionalProperties": false,
+      "required": [
+        "type",
+        "name",
+        "summary",
+        "ports"
+      ]
+    },
+    "Metrics": {
+      "type": "object",
+      "properties": {
+        "boominess_db": {
+          "description": "Exterior, dB.",
+          "type": [
+            "number",
+            "null"
+          ],
+          "format": "double"
+        },
+        "drone_exterior": {
+          "anyOf": [
+            {
+              "$ref": "#/$defs/DroneReport"
+            },
+            {
+              "type": "null"
+            }
+          ]
+        },
+        "drone_interior": {
+          "description": "Through the measured cabin transfer function; `None` without one.",
+          "anyOf": [
+            {
+              "$ref": "#/$defs/DroneReport"
+            },
+            {
+              "type": "null"
+            }
+          ]
+        },
+        "firing_order": {
+          "description": "Engine order of firing.",
+          "type": "number",
+          "format": "double"
+        },
+        "rasp_proxy_db": {
+          "description": "Exterior, dB.",
+          "type": [
+            "number",
+            "null"
+          ],
+          "format": "double"
+        }
+      },
+      "required": [
+        "firing_order"
+      ]
+    },
+    "Param": {
+      "type": "object",
+      "properties": {
+        "default": {
+          "type": [
+            "number",
+            "null"
+          ],
+          "format": "double",
+          "default": null
+        },
+        "key": {
+          "description": "Field name in the project file.",
+          "type": "string"
+        },
+        "kind": {
+          "$ref": "#/$defs/ParamKind"
+        },
+        "label": {
+          "type": "string"
+        },
+        "max": {
+          "type": [
+            "number",
+            "null"
+          ],
+          "format": "double",
+          "default": null
+        },
+        "min": {
+          "type": [
+            "number",
+            "null"
+          ],
+          "format": "double",
+          "default": null
+        },
+        "unit": {
+          "description": "Numbers only: unit, inclusive range, and the editor's default.",
+          "type": [
+            "string",
+            "null"
+          ],
+          "default": null
+        }
+      },
+      "additionalProperties": false,
+      "required": [
+        "key",
+        "label",
+        "kind"
+      ]
+    },
+    "ParamKind": {
+      "oneOf": [
+        {
+          "type": "string",
+          "enum": [
+            "number"
+          ]
+        },
+        {
+          "description": "A material id from the project's table.",
+          "type": "string",
+          "const": "material"
+        },
+        {
+          "description": "A direction in vehicle coordinates (normalised on use).",
+          "type": "string",
+          "const": "direction"
+        },
+        {
+          "description": "Offsets from a port, mm, one per extra port.",
+          "type": "string",
+          "const": "offsets"
+        }
+      ]
+    },
+    "PieceLayout": {
+      "oneOf": [
+        {
+          "type": "object",
+          "properties": {
+            "from": {
+              "type": "array",
+              "items": {
+                "type": "number",
+                "format": "double"
+              },
+              "maxItems": 3,
+              "minItems": 3
+            },
+            "kind": {
+              "type": "string",
+              "const": "straight"
+            },
+            "to": {
+              "type": "array",
+              "items": {
+                "type": "number",
+                "format": "double"
+              },
+              "maxItems": 3,
+              "minItems": 3
+            }
+          },
+          "required": [
+            "kind",
+            "from",
+            "to"
+          ]
+        },
+        {
+          "description": "Constant-radius arc from `from` to `to` about `centre`.",
+          "type": "object",
+          "properties": {
+            "angle_deg": {
+              "type": "number",
+              "format": "double"
+            },
+            "centre": {
+              "type": "array",
+              "items": {
+                "type": "number",
+                "format": "double"
+              },
+              "maxItems": 3,
+              "minItems": 3
+            },
+            "from": {
+              "type": "array",
+              "items": {
+                "type": "number",
+                "format": "double"
+              },
+              "maxItems": 3,
+              "minItems": 3
+            },
+            "kind": {
+              "type": "string",
+              "const": "arc"
+            },
+            "radius_mm": {
+              "type": "number",
+              "format": "double"
+            },
+            "to": {
+              "type": "array",
+              "items": {
+                "type": "number",
+                "format": "double"
+              },
+              "maxItems": 3,
+              "minItems": 3
+            }
+          },
+          "required": [
+            "kind",
+            "from",
+            "to",
+            "centre",
+            "radius_mm",
+            "angle_deg"
+          ]
+        }
+      ]
+    },
+    "PointOutcome": {
+      "description": "A point either solved or failed; failures carry the reason and no numbers.",
+      "oneOf": [
+        {
+          "type": "object",
+          "properties": {
+            "status": {
+              "type": "string",
+              "const": "solved"
+            }
+          },
+          "$ref": "#/$defs/PointResult",
+          "required": [
+            "status"
+          ]
+        },
+        {
+          "type": "object",
+          "properties": {
+            "error": {
+              "type": "string"
+            },
+            "rpm": {
+              "type": "number",
+              "format": "double"
+            },
+            "status": {
+              "type": "string",
+              "const": "failed"
+            }
+          },
+          "required": [
+            "status",
+            "rpm",
+            "error"
+          ]
+        }
+      ]
+    },
+    "PointResult": {
+      "description": "Solution at one engine speed.",
+      "type": "object",
+      "properties": {
+        "backpressure_pa": {
+          "description": "Mean static pressure above ambient at the downpipe flange, Pa (time domain only).",
+          "type": [
+            "number",
+            "null"
+          ],
+          "format": "double"
+        },
+        "mass_balance_error": {
+          "description": "|outlet mass − source mass| / source mass over the analysed cycles (time domain only).",
+          "type": [
+            "number",
+            "null"
+          ],
+          "format": "double"
+        },
+        "mass_flow_kg_s": {
+          "type": "number",
+          "format": "double"
+        },
+        "orders": {
+          "description": "Engine orders 1–8: `(order, frequency_hz, spl_db)`.",
+          "type": "array",
+          "items": {
+            "type": "array",
+            "maxItems": 3,
+            "minItems": 3,
+            "prefixItems": [
+              {
+                "type": "integer",
+                "format": "uint32",
+                "minimum": 0
+              },
+              {
+                "type": "number",
+                "format": "double"
+              },
+              {
+                "type": "number",
+                "format": "double"
+              }
+            ]
+          }
+        },
+        "outlet_temperature_k": {
+          "description": "Mean gas temperature leaving the reference outlet, K.",
+          "type": "number",
+          "format": "double"
+        },
+        "overall_db": {
+          "type": "number",
+          "format": "double"
+        },
+        "overall_dba": {
+          "type": "number",
+          "format": "double"
+        },
+        "provenance": {
+          "$ref": "#/$defs/Provenance"
+        },
+        "rpm": {
+          "type": "number",
+          "format": "double"
+        },
+        "spectrum": {
+          "type": "array",
+          "items": {
+            "$ref": "#/$defs/Line"
+          }
+        },
+        "turbine_power_w": {
+          "type": "number",
+          "format": "double"
+        }
+      },
+      "required": [
+        "rpm",
+        "provenance",
+        "spectrum",
+        "orders",
+        "overall_db",
+        "overall_dba",
+        "mass_flow_kg_s",
+        "turbine_power_w",
+        "outlet_temperature_k"
+      ]
+    },
+    "PortLayout": {
+      "type": "object",
+      "properties": {
+        "name": {
+          "type": "string"
+        },
+        "position": {
+          "type": "array",
+          "items": {
+            "type": "number",
+            "format": "double"
+          },
+          "maxItems": 3,
+          "minItems": 3
+        }
+      },
+      "required": [
+        "name",
+        "position"
+      ]
+    },
+    "Provenance": {
+      "description": "How a result was produced; attached to every result.",
+      "type": "object",
+      "properties": {
+        "cells": {
+          "type": "integer",
+          "format": "uint",
+          "minimum": 0
+        },
+        "core_version": {
+          "type": "string"
+        },
+        "dx_max_mm": {
+          "type": "number",
+          "format": "double"
+        },
+        "dx_min_mm": {
+          "type": "number",
+          "format": "double"
+        },
+        "dx_target_mm": {
+          "type": "number",
+          "format": "double"
+        },
+        "evo": {
+          "$ref": "#/$defs/EvoState"
+        },
+        "evo_source": {
+          "$ref": "#/$defs/EvoSource"
+        },
+        "gas_table": {
+          "type": "string"
+        },
+        "project_hash": {
+          "type": "string"
+        },
+        "small_signal": {
+          "description": "Four-pole result of a network with elements that are nonlinear at exhaust amplitudes\n(valves, orifices): valid for small signals only.",
+          "type": "boolean"
+        },
+        "solver": {
+          "$ref": "#/$defs/SolverKind"
+        },
+        "thermal_profile": {
+          "description": "Wall and gas temperature model, with a BLAKE3 hash of its inputs.",
+          "type": "string"
+        },
+        "time_domain": {
+          "description": "Time-domain run details; absent for four-pole results.",
+          "anyOf": [
+            {
+              "$ref": "#/$defs/TimeDomainRun"
+            },
+            {
+              "type": "null"
+            }
+          ]
+        },
+        "warnings": {
+          "description": "Modelling limitations that affect this result.",
+          "type": "array",
+          "items": {
+            "type": "string"
+          }
+        }
+      },
+      "required": [
+        "solver",
+        "core_version",
+        "project_hash",
+        "dx_target_mm",
+        "cells",
+        "dx_min_mm",
+        "dx_max_mm",
+        "gas_table",
+        "thermal_profile",
+        "evo",
+        "evo_source",
+        "small_signal",
+        "warnings"
+      ]
+    },
+    "RouteLayout": {
+      "type": "object",
+      "properties": {
+        "bend_radius_mm": {
+          "description": "Centreline radius of the bend at each via point.",
+          "type": "array",
+          "items": {
+            "type": "number",
+            "format": "double"
+          }
+        },
+        "id": {
+          "type": "string"
+        },
+        "length_mm": {
+          "description": "Centreline length: the flow solver's x-axis along this route.",
+          "type": "number",
+          "format": "double"
+        },
+        "material": {
+          "type": "string"
+        },
+        "od_mm": {
+          "type": "number",
+          "format": "double"
+        },
+        "pieces": {
+          "type": "array",
+          "items": {
+            "$ref": "#/$defs/PieceLayout"
+          }
+        },
+        "points": {
+          "description": "Start port, via points, end port.",
+          "type": "array",
+          "items": {
+            "type": "array",
+            "items": {
+              "type": "number",
+              "format": "double"
+            },
+            "maxItems": 3,
+            "minItems": 3
+          }
+        },
+        "wall_mm": {
+          "type": "number",
+          "format": "double"
+        }
+      },
+      "required": [
+        "id",
+        "od_mm",
+        "wall_mm",
+        "material",
+        "points",
+        "bend_radius_mm",
+        "pieces",
+        "length_mm"
+      ]
+    },
+    "SolverKind": {
+      "description": "Which solver produced a result.",
+      "type": "string",
+      "enum": [
+        "time_domain",
+        "four_pole"
+      ]
+    },
+    "SweepResult": {
+      "type": "object",
+      "properties": {
+        "metrics": {
+          "$ref": "#/$defs/Metrics"
+        },
+        "points": {
+          "type": "array",
+          "items": {
+            "$ref": "#/$defs/PointOutcome"
+          }
+        },
+        "project": {
+          "type": "string"
+        },
+        "project_hash": {
+          "type": "string"
+        },
+        "solver": {
+          "$ref": "#/$defs/SolverKind"
+        }
+      },
+      "required": [
+        "project",
+        "project_hash",
+        "solver",
+        "points",
+        "metrics"
+      ]
+    },
+    "TimeDomainRun": {
+      "description": "Scheme and convergence of a time-domain run.",
+      "type": "object",
+      "properties": {
+        "cfl": {
+          "type": "number",
+          "format": "double"
+        },
+        "cfl_max": {
+          "type": "number",
+          "format": "double"
+        },
+        "converged": {
+          "type": "boolean"
+        },
+        "cycles": {
+          "type": "integer",
+          "format": "uint32",
+          "minimum": 0
+        },
+        "limiter": {
+          "$ref": "#/$defs/Limiter"
+        },
+        "period_cycles": {
+          "description": "Period of the solution in engine cycles (1 or 2).",
+          "type": "integer",
+          "format": "uint32",
+          "minimum": 0
+        },
+        "periodicity_residual": {
+          "description": "Largest relative change of the monitored signals between the last cycle and the cycle\none period earlier.",
+          "type": "number",
+          "format": "double"
+        },
+        "periodicity_tolerance": {
+          "type": "number",
+          "format": "double"
+        }
+      },
+      "required": [
+        "cfl",
+        "cfl_max",
+        "limiter",
+        "converged",
+        "period_cycles",
+        "cycles",
+        "periodicity_residual",
+        "periodicity_tolerance"
+      ]
+    }
+  }
+}

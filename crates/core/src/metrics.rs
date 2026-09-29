@@ -15,6 +15,7 @@
 //! Failed points are skipped; points whose time-domain run did not converge are used and
 //! listed.
 
+use schemars::JsonSchema;
 use serde::Serialize;
 
 use crate::project::Project;
@@ -25,7 +26,7 @@ const RASP_HIGH_HZ: f64 = 800.0;
 const RASP_LOW_HZ: f64 = 300.0;
 const RASP_RPM: [f64; 2] = [3000.0, 5000.0];
 
-#[derive(Clone, Debug, PartialEq, Serialize)]
+#[derive(Clone, Debug, PartialEq, Serialize, JsonSchema)]
 pub struct Metrics {
     /// Engine order of firing.
     pub firing_order: f64,
@@ -38,7 +39,7 @@ pub struct Metrics {
     pub rasp_proxy_db: Option<f64>,
 }
 
-#[derive(Clone, Debug, PartialEq, Serialize)]
+#[derive(Clone, Debug, PartialEq, Serialize, JsonSchema)]
 pub struct DroneReport {
     /// Firing-order level per solved speed: `[rpm, dB]`.
     pub track: Vec<[f64; 2]>,

@@ -1,10 +1,12 @@
 //! `exhaustctl`: headless front end to `exhaust-core`. Anything the app solves, this solves
 //! with identical output.
 
-use std::path::PathBuf;
+use std::path::{Path, PathBuf};
 use std::process::ExitCode;
 
 use clap::{Parser, Subcommand, ValueEnum};
+use exhaust_core::layout::layout;
+use exhaust_core::manifest;
 use exhaust_core::project::{Project, sweep_points};
 use exhaust_core::solve::{SolverKind, sweep};
 use exhaust_core::validation::{PENDING, cases};
@@ -15,6 +17,14 @@ enum Solver {
     TimeDomain,
     /// Linear four-pole preview.
     FourPole,
+}
+
+#[derive(Clone, Copy, ValueEnum)]
+enum Export {
+    /// Route centrelines and element envelopes, as the app draws them.
+    Layout,
+    /// Element manifests: parameters with units and allowed ranges.
+    Manifests,
 }
 
 #[derive(Parser)]
@@ -39,6 +49,16 @@ enum Command {
         sweep: Option<String>,
         #[arg(long, value_enum, default_value = "time-domain")]
         solver: Solver,
+        /// Write the result here instead of standard output.
+        #[arg(long, short)]
+        out: Option<PathBuf>,
+    },
+    /// Export data derived from a project; prints JSON.
+    Export {
+        #[arg(value_enum)]
+        what: Export,
+        /// Project file (JSON); not needed for manifests.
+        project: Option<PathBuf>,
         /// Write the result here instead of standard output.
         #[arg(long, short)]
         out: Option<PathBuf>,
@@ -72,9 +92,7 @@ fn run(cli: Cli) -> Result<ExitCode, String> {
             solver,
             out,
         } => {
-            let text = std::fs::read_to_string(&project)
-                .map_err(|e| format!("{}: {e}", project.display()))?;
-            let project = Project::from_json(&text).map_err(|e| e.to_string())?;
+            let project = read_project(&project)?;
             let rpms = match rpm_sweep {
                 Some(s) => parse_sweep(&s)?,
                 None => project.operating.sweep(),
@@ -84,13 +102,7 @@ fn run(cli: Cli) -> Result<ExitCode, String> {
                 Solver::FourPole => SolverKind::FourPole,
             };
             let result = sweep(&project, &rpms, kind);
-            let json = serde_json::to_string_pretty(&result).expect("results serialise");
-            match out {
-                Some(path) => {
-                    std::fs::write(&path, json).map_err(|e| format!("{}: {e}", path.display()))?
-                }
-                None => println!("{json}"),
-            }
+            emit(&result, out)?;
             let failed = result
                 .points
                 .iter()
@@ -102,6 +114,17 @@ fn run(cli: Cli) -> Result<ExitCode, String> {
                     rpms.len()
                 );
                 return Ok(ExitCode::FAILURE);
+            }
+            Ok(ExitCode::SUCCESS)
+        }
+        Command::Export { what, project, out } => {
+            match what {
+                Export::Layout => {
+                    let path = project.ok_or("export layout needs a project file")?;
+                    let layout = layout(&read_project(&path)?).map_err(|e| e.to_string())?;
+                    emit(&layout, out)?;
+                }
+                Export::Manifests => emit(manifest::all(), out)?,
             }
             Ok(ExitCode::SUCCESS)
         }
@@ -164,6 +187,23 @@ fn run(cli: Cli) -> Result<ExitCode, String> {
             } else {
                 ExitCode::FAILURE
             })
+        }
+    }
+}
+
+fn read_project(path: &Path) -> Result<Project, String> {
+    let text = std::fs::read_to_string(path).map_err(|e| format!("{}: {e}", path.display()))?;
+    Project::from_json(&text).map_err(|e| e.to_string())
+}
+
+/// Writes `value` as pretty JSON to `out`, or to standard output.
+fn emit(value: &(impl serde::Serialize + ?Sized), out: Option<PathBuf>) -> Result<(), String> {
+    let json = serde_json::to_string_pretty(value).expect("results serialise");
+    match out {
+        Some(path) => std::fs::write(&path, json).map_err(|e| format!("{}: {e}", path.display())),
+        None => {
+            println!("{json}");
+            Ok(())
         }
     }
 }
