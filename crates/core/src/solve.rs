@@ -30,6 +30,7 @@ use crate::model::{Model, SourceInputs, build};
 use crate::project::{Project, WallThermal};
 use crate::radiation::{a_weighting_db, monopole_pressure};
 use crate::spectrum::fft;
+use crate::thermal::{self, ThermalInputs};
 
 const P_REF: f64 = 20e-6;
 const R_AIR: f64 = 287.05;
@@ -62,24 +63,42 @@ pub struct Provenance {
     pub cells: usize,
     pub dx_min_mm: f64,
     pub dx_max_mm: f64,
-    pub cfl: f64,
-    pub cfl_max: f64,
-    pub limiter: Limiter,
     pub gas_table: String,
-    /// Wall and initial temperature model, with a BLAKE3 hash of its inputs.
+    /// Wall and gas temperature model, with a BLAKE3 hash of its inputs.
     pub thermal_profile: String,
     pub evo: EvoState,
     pub evo_source: EvoSource,
+    /// Time-domain run details; absent for four-pole results.
+    pub time_domain: Option<TimeDomainRun>,
+    /// Four-pole result of a network with elements that are nonlinear at exhaust amplitudes
+    /// (valves, orifices): valid for small signals only.
+    pub small_signal: bool,
+    /// Modelling limitations that affect this result.
+    pub warnings: Vec<String>,
+}
+
+impl Provenance {
+    /// Four-pole results are direct solves; time-domain results must meet the periodicity
+    /// tolerance.
+    pub fn converged(&self) -> bool {
+        self.time_domain.as_ref().is_none_or(|t| t.converged)
+    }
+}
+
+/// Scheme and convergence of a time-domain run.
+#[derive(Clone, Debug, PartialEq, Serialize)]
+pub struct TimeDomainRun {
+    pub cfl: f64,
+    pub cfl_max: f64,
+    pub limiter: Limiter,
     pub converged: bool,
-    /// Period of the converged solution in engine cycles (1 or 2).
+    /// Period of the solution in engine cycles (1 or 2).
     pub period_cycles: u32,
     pub cycles: u32,
     /// Largest relative change of the monitored signals between the last cycle and the cycle
     /// one period earlier.
     pub periodicity_residual: f64,
     pub periodicity_tolerance: f64,
-    /// Modelling limitations that affect this result.
-    pub warnings: Vec<String>,
 }
 
 /// One spectral line at the receiver.
@@ -104,13 +123,13 @@ pub struct PointResult {
     pub orders: Vec<(u32, f64, f64)>,
     pub overall_db: f64,
     pub overall_dba: f64,
-    /// Mean static pressure above ambient at the downpipe flange, Pa.
-    pub backpressure_pa: f64,
+    /// Mean static pressure above ambient at the downpipe flange, Pa (time domain only).
+    pub backpressure_pa: Option<f64>,
     pub mass_flow_kg_s: f64,
-    /// |outlet mass − source mass| / source mass over the analysed cycles.
-    pub mass_balance_error: f64,
+    /// |outlet mass − source mass| / source mass over the analysed cycles (time domain only).
+    pub mass_balance_error: Option<f64>,
     pub turbine_power_w: f64,
-    /// Mass-weighted mean gas temperature leaving the reference outlet, K.
+    /// Mean gas temperature leaving the reference outlet, K.
     pub outlet_temperature_k: f64,
 }
 
@@ -133,22 +152,116 @@ pub struct SweepResult {
 /// Solves every engine speed in parallel (one Rayon task per point; points are independent,
 /// so results do not depend on thread count or scheduling).
 pub fn solve_sweep(project: &Project, rpms: &[f64]) -> SweepResult {
+    sweep(project, rpms, SolverKind::TimeDomain)
+}
+
+/// Sweep with either solver.
+pub fn sweep(project: &Project, rpms: &[f64], solver: SolverKind) -> SweepResult {
     let points = rpms
         .par_iter()
-        .map(|&rpm| match solve_point(project, rpm) {
-            Ok(r) => PointOutcome::Solved(Box::new(r)),
-            Err(e) => PointOutcome::Failed {
-                rpm,
-                error: e.to_string(),
-            },
+        .map(|&rpm| {
+            let r = match solver {
+                SolverKind::TimeDomain => solve_point(project, rpm),
+                SolverKind::FourPole => crate::preview::solve_point(project, rpm),
+            };
+            match r {
+                Ok(r) => PointOutcome::Solved(Box::new(r)),
+                Err(e) => PointOutcome::Failed {
+                    rpm,
+                    error: e.to_string(),
+                },
+            }
         })
         .collect();
     SweepResult {
         project: project.name.clone(),
         project_hash: project.hash(),
-        solver: SolverKind::TimeDomain,
+        solver,
         points,
     }
+}
+
+/// Spectrum at the receiver.
+pub struct ReceiverSpectrum {
+    pub lines: Vec<Line>,
+    /// Engine orders 1–8: `(order, frequency_hz, spl_db)`.
+    pub orders: Vec<(u32, f64, f64)>,
+    pub overall_db: f64,
+    pub overall_dba: f64,
+}
+
+/// Receiver spectrum from the complex volume velocity of each outlet at each line: lines
+/// spaced `f_line` until `volume_velocity` returns `None` or `max_frequency_hz`; the order of
+/// line `m` is `m f_line / (rpm/60)`.
+pub fn receiver_spectrum(
+    project: &Project,
+    model: &Model,
+    rpm: f64,
+    f_line: f64,
+    mut volume_velocity: impl FnMut(usize) -> Option<Vec<Complex64>>,
+) -> Result<ReceiverSpectrum> {
+    let p_amb = project.ambient.pressure_pa;
+    let t_amb = project.ambient.temperature_k;
+    let rho0 = p_amb / (R_AIR * t_amb);
+    let c0 = (1.4 * R_AIR * t_amb).sqrt();
+    let positions: Vec<Vec3> = model.outlets.iter().map(|o| o.position).collect();
+    let receiver = receiver_position(project, model, reference_outlet(project, model)?);
+    let ground_z = project.ambient.ground_z_mm * 1e-3;
+    let mut spectrum = Vec::new();
+    let mut m = 1;
+    while m as f64 * f_line <= project.solver.max_frequency_hz {
+        let Some(q) = volume_velocity(m) else { break };
+        let f = m as f64 * f_line;
+        let p = monopole_pressure(
+            2.0 * std::f64::consts::PI * f,
+            rho0,
+            c0,
+            &positions,
+            &q,
+            receiver,
+            ground_z,
+        );
+        let spl = 20.0 * (p.norm() / (std::f64::consts::SQRT_2 * P_REF)).log10();
+        spectrum.push(Line {
+            frequency_hz: f,
+            order: f / (rpm / 60.0),
+            spl_db: spl,
+            spl_dba: spl + a_weighting_db(f),
+            phase_rad: p.arg(),
+        });
+        m += 1;
+    }
+    let orders = (1..=8u32)
+        .filter_map(|o| {
+            spectrum
+                .iter()
+                .find(|l| (l.order - o as f64).abs() < 1e-6)
+                .map(|l| (o, l.frequency_hz, l.spl_db))
+        })
+        .collect();
+    let energy_sum = |f: fn(&Line) -> f64| {
+        10.0 * spectrum
+            .iter()
+            .map(|l| 10f64.powf(f(l) / 10.0))
+            .sum::<f64>()
+            .log10()
+    };
+    Ok(ReceiverSpectrum {
+        overall_db: energy_sum(|l| l.spl_db),
+        overall_dba: energy_sum(|l| l.spl_dba),
+        lines: spectrum,
+        orders,
+    })
+}
+
+/// Grid summary for provenance: (cells, smallest and largest Δx in mm).
+pub fn grid_summary(net: &Network) -> (usize, f64, f64) {
+    let dxs = net.ducts.iter().map(|d| d.dx * 1e3);
+    (
+        net.ducts.iter().map(Duct::n).sum(),
+        dxs.clone().fold(f64::INFINITY, f64::min),
+        dxs.fold(0.0, f64::max),
+    )
 }
 
 /// EVO state for `rpm` and where it came from.
@@ -190,7 +303,7 @@ pub fn solve_point(project: &Project, rpm: f64) -> Result<PointResult> {
     let n_samples = settings.samples_per_cycle as usize;
 
     let pre = prerun(project, &gas, rpm, evo, dx)?;
-    let model = build(
+    let mut model = build(
         project,
         gas.clone(),
         dx,
@@ -201,17 +314,36 @@ pub fn solve_point(project: &Project, rpm: f64) -> Result<PointResult> {
             t_init: pre.manifold_t,
         },
     )?;
-    let t_init = match project.solver.wall_thermal {
-        WallThermal::Adiabatic => pre.t0,
-        WallThermal::Fixed { temperature_k } => temperature_k.max(0.5 * pre.t0),
+    let profile = match project.solver.wall_thermal {
+        WallThermal::Computed => Some(thermal::solve(
+            &model.network,
+            model.source_node,
+            &thermal_inputs(project, pre.mass_flow, pre.t0),
+        )?),
+        _ => None,
     };
-    let rho_init = p_amb / (gas.r() * t_init);
+    if let Some(pr) = &profile {
+        for (d, duct) in model.network.ducts.iter_mut().enumerate() {
+            if duct.wall.is_some() {
+                duct.t_wall = Some(pr.t_wall[d].clone());
+            }
+        }
+    }
+    let t_uniform = match project.solver.wall_thermal {
+        WallThermal::Fixed { temperature_k } => temperature_k.max(0.5 * pre.t0),
+        _ => pre.t0,
+    };
     let shares = model.flow_share.clone();
-    let areas: Vec<f64> = model.network.ducts.iter().map(|d| d.area_face[0]).collect();
-    let mut sim = Simulation::new(model.network.clone(), |d, _| {
+    let ducts = model.network.ducts.clone();
+    let mut sim = Simulation::new(model.network.clone(), |d, x| {
+        let t = match &profile {
+            Some(pr) => pr.t_gas[d][((x / ducts[d].dx) as usize).min(ducts[d].n() - 1)],
+            None => t_uniform,
+        };
+        let rho = p_amb / (gas.r() * t);
         (
-            rho_init,
-            shares[d] * pre.mass_flow / (rho_init * areas[d]),
+            rho,
+            shares[d] * pre.mass_flow / (rho * ducts[d].area_face[0]),
             p_amb,
         )
     })?;
@@ -268,76 +400,40 @@ pub fn solve_point(project: &Project, rpm: f64) -> Result<PointResult> {
         f64::NAN
     };
 
-    let q_series: Vec<Vec<f64>> = (0..model.outlets.len())
-        .map(|o| rec.last_cycles(&rec.outlet_q[o], analysed))
+    let q_spectra: Vec<Vec<Complex64>> = (0..model.outlets.len())
+        .map(|o| fft(&rec.last_cycles(&rec.outlet_q[o], analysed)))
         .collect();
-    let q_spectra: Vec<Vec<Complex64>> = q_series.iter().map(|s| fft(s)).collect();
     let n_total = analysed * n_samples;
-    let t_amb = project.ambient.temperature_k;
-    let rho0 = p_amb / (R_AIR * t_amb);
-    let c0 = (1.4 * R_AIR * t_amb).sqrt();
-    let positions: Vec<Vec3> = model.outlets.iter().map(|o| o.position).collect();
-    let receiver = receiver_position(project, &model, ref_idx);
-    let ground_z = project.ambient.ground_z_mm * 1e-3;
     // Lines at multiples of f_c/P fall on every (analysed/P)-th FFT bin.
-    let f_line = rpm / 120.0 / period as f64;
     let bins_per_line = analysed / period as usize;
-    let mut spectrum = Vec::new();
-    let mut m = 1;
-    while m as f64 * f_line <= settings.max_frequency_hz && bins_per_line * m < n_total / 2 {
+    let ReceiverSpectrum {
+        lines: spectrum,
+        orders,
+        overall_db,
+        overall_dba,
+    } = receiver_spectrum(project, &model, rpm, rpm / 120.0 / period as f64, |m| {
         let bin = bins_per_line * m;
-        let q: Vec<Complex64> = q_spectra
-            .iter()
-            .map(|s| 2.0 * s[bin] / n_total as f64)
-            .collect();
-        let f = m as f64 * f_line;
-        let p = monopole_pressure(
-            2.0 * std::f64::consts::PI * f,
-            rho0,
-            c0,
-            &positions,
-            &q,
-            receiver,
-            ground_z,
-        );
-        let spl = 20.0 * (p.norm() / (std::f64::consts::SQRT_2 * P_REF)).log10();
-        let order = m as f64 / (2.0 * period as f64);
-        spectrum.push(Line {
-            frequency_hz: f,
-            order,
-            spl_db: spl,
-            spl_dba: spl + a_weighting_db(f),
-            phase_rad: p.arg(),
-        });
-        m += 1;
-    }
-    let orders = (1..=8u32)
-        .filter_map(|o| {
-            spectrum
-                .get(2 * period as usize * o as usize - 1)
-                .map(|l| (o, l.frequency_hz, l.spl_db))
+        (bin < n_total / 2).then(|| {
+            q_spectra
+                .iter()
+                .map(|s| 2.0 * s[bin] / n_total as f64)
+                .collect()
         })
-        .collect();
-    let energy_sum = |f: fn(&Line) -> f64| {
-        10.0 * spectrum
-            .iter()
-            .map(|l| 10f64.powf(f(l) / 10.0))
-            .sum::<f64>()
-            .log10()
-    };
+    })?;
     let flange = rec.last_cycles(&rec.flange_p, analysed);
     let backpressure = flange.iter().sum::<f64>() / flange.len() as f64 - p_amb;
     let (turbine0, turbine1) = (m0.turbine_work, m1.turbine_work);
 
-    let cells: usize = model.network.ducts.iter().map(Duct::n).sum();
-    let dxs = model.network.ducts.iter().map(|d| d.dx * 1e3);
-    let thermal = match &project.solver.wall_thermal {
-        WallThermal::Adiabatic => {
-            format!("adiabatic walls; initial gas {t_init:.1} K from source pre-run")
+    let (cells, dx_min_mm, dx_max_mm) = grid_summary(&model.network);
+    let thermal = match (&project.solver.wall_thermal, &profile) {
+        (WallThermal::Computed, Some(pr)) => format!(
+            "thermal model walls and initial gas; source {:.1} K, {:.4} kg/s [{}]",
+            pre.t0, pre.mass_flow, pr.hash
+        ),
+        (WallThermal::Fixed { temperature_k }, _) => {
+            format!("fixed wall {temperature_k:.1} K; initial gas {t_uniform:.1} K")
         }
-        WallThermal::Fixed { temperature_k } => {
-            format!("fixed wall {temperature_k:.1} K; initial gas {t_init:.1} K")
-        }
+        _ => format!("adiabatic walls; initial gas {t_uniform:.1} K from source pre-run"),
     };
     let thermal_hash = blake3::hash(thermal.as_bytes()).to_hex()[..16].to_string();
     Ok(PointResult {
@@ -348,29 +444,32 @@ pub fn solve_point(project: &Project, rpm: f64) -> Result<PointResult> {
             project_hash: project.hash(),
             dx_target_mm: settings.dx_mm,
             cells,
-            dx_min_mm: dxs.clone().fold(f64::INFINITY, f64::min),
-            dx_max_mm: dxs.fold(0.0, f64::max),
-            cfl: settings.cfl,
-            cfl_max: sim.max_cfl,
-            limiter: settings.limiter,
+            dx_min_mm,
+            dx_max_mm,
             gas_table: gas.label().to_string(),
             thermal_profile: format!("{thermal} [{thermal_hash}]"),
             evo,
             evo_source,
-            converged,
-            period_cycles: period,
-            cycles,
-            periodicity_residual: residual,
-            periodicity_tolerance: settings.periodicity_tolerance,
+            time_domain: Some(TimeDomainRun {
+                cfl: settings.cfl,
+                cfl_max: sim.max_cfl,
+                limiter: settings.limiter,
+                converged,
+                period_cycles: period,
+                cycles,
+                periodicity_residual: residual,
+                periodicity_tolerance: settings.periodicity_tolerance,
+            }),
+            small_signal: false,
             warnings: model.warnings.clone(),
         },
-        overall_db: energy_sum(|l| l.spl_db),
-        overall_dba: energy_sum(|l| l.spl_dba),
+        overall_db,
+        overall_dba,
         spectrum,
         orders,
-        backpressure_pa: backpressure,
+        backpressure_pa: Some(backpressure),
         mass_flow_kg_s: source_mass / span,
-        mass_balance_error: ((outlet_mass - source_mass) / source_mass).abs(),
+        mass_balance_error: Some(((outlet_mass - source_mass) / source_mass).abs()),
         turbine_power_w: (turbine1 - turbine0) / span,
         outlet_temperature_k: sim.net.gas.t_from_h(outlet_h0),
     })
@@ -481,6 +580,18 @@ fn reference_outlet(project: &Project, model: &Model) -> Result<usize> {
             .iter()
             .position(|o| &o.element == id)
             .ok_or_else(|| Error::invalid(format!("receiver.outlet '{id}' is not an outlet"))),
+    }
+}
+
+/// Thermal-model inputs for a mean engine flow and source temperature.
+pub fn thermal_inputs(project: &Project, mass_flow: f64, t_source: f64) -> ThermalInputs {
+    let a = &project.ambient;
+    ThermalInputs {
+        mass_flow,
+        t_source,
+        p_amb: a.pressure_pa,
+        t_amb: a.temperature_k,
+        air_speed: a.vehicle_speed_kmh / 3.6 * a.underbody_air_factor,
     }
 }
 

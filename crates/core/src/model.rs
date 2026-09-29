@@ -6,13 +6,13 @@
 
 use std::collections::HashMap;
 
+use crate::elements::{self, Builder};
 use crate::engine::EvoState;
 use crate::error::{Error, Result};
 use crate::gas::Gas;
-use crate::gas1d::nodes::JunctionKind;
-use crate::gas1d::{Duct, End, JunctionBc, Manifold, Network, Node, Port, RadiationBc, SourceBc};
+use crate::gas1d::{Duct, End, Manifold, Network, Node, Port, RadiationBc, SourceBc};
 use crate::geometry::{Piece, Vec3, bend_loss, centreline, scale};
-use crate::project::{ElementKind, PortRef, Project, WallThermal};
+use crate::project::{ElementKind, PortRef, Project};
 
 /// Network plus the bookkeeping needed to read results back onto the project.
 #[derive(Clone, Debug)]
@@ -105,12 +105,23 @@ pub fn build(project: &Project, gas: Gas, dx: f64, src: SourceInputs) -> Result<
             ));
         }
     }
-    let mut ducts = Vec::new();
+    let mut b = Builder {
+        project,
+        gas,
+        dx,
+        ducts: Vec::new(),
+        nodes: Vec::new(),
+        ports: HashMap::new(),
+        pipes: HashMap::new(),
+        warnings,
+    };
+    for r in routes {
+        b.pipes.insert(r.from.clone(), r.pipe.clone());
+        b.pipes.insert(r.to.clone(), r.pipe.clone());
+    }
     let mut route_duct = vec![(usize::MAX, 0.0); routes.len()];
-    // Where each element port lands: (duct, end).
-    let mut port_end: HashMap<PortRef, Port> = HashMap::new();
     for first in (0..routes.len()).filter(|&r| !has_prev[r]) {
-        let idx = ducts.len();
+        let idx = b.ducts.len();
         let mut segments = Vec::new();
         let mut losses = Vec::new();
         let mut labels = Vec::new();
@@ -148,39 +159,28 @@ pub fn build(project: &Project, gas: Gas, dx: f64, src: SourceInputs) -> Result<
                 _ => break,
             }
         }
-        port_end.insert(routes[first].from.clone(), Port::start(idx));
-        port_end.insert(routes[r].to.clone(), Port::end(idx));
+        b.ports.insert(routes[first].from.clone(), Port::start(idx));
+        b.ports.insert(routes[r].to.clone(), Port::end(idx));
         let mut duct = Duct::from_profile(labels.join(" + "), &segments, dx);
-        if project.solver.friction {
-            duct = duct.with_friction(project.solver.wall_roughness_mm * 1e-3);
-        }
         for (x0, x1, k) in losses {
             duct.add_loss(x0, x1, k);
         }
-        if let WallThermal::Fixed { temperature_k } = project.solver.wall_thermal {
-            duct.t_wall = Some(vec![temperature_k; duct.n()]);
-        }
-        ducts.push(duct);
+        let pipe = &routes[first].pipe;
+        duct.wall = b.pipe_wall(pipe.od_mm * 1e-3, pipe.wall_mm * 1e-3, &pipe.material);
+        b.duct(duct);
     }
     if route_duct.iter().any(|d| d.0 == usize::MAX) {
         return Err(Error::invalid(
             "routes joined through area changes form a closed loop",
         ));
     }
-    let port_of = |element: &str, port: &str| {
-        port_end[&PortRef {
-            element: element.into(),
-            port: port.into(),
-        }]
-    };
 
-    let mut nodes = Vec::new();
     let mut outlets = Vec::new();
     let mut source_node = usize::MAX;
     for el in &project.system.elements {
         match &el.kind {
             ElementKind::Source => {
-                let port = port_of(&el.id, "out");
+                let port = b.port(el, "out");
                 let t = &project.turbine;
                 let manifolds = t
                     .scrolls
@@ -189,13 +189,14 @@ pub fn build(project: &Project, gas: Gas, dx: f64, src: SourceInputs) -> Result<
                         cylinders: s.cylinders.iter().map(|c| c - 1).collect(),
                         volume: s.manifold_volume_l * 1e-3,
                         turbine_area: s.nozzle_area_cm2 * 1e-4,
+                        ua: s.heat_loss_w_per_k,
+                        t_coolant: t.coolant_temperature_k,
                     })
                     .collect();
                 if t.scrolls.iter().flat_map(|s| &s.cylinders).any(|&c| c == 0) {
                     return Err(Error::invalid("turbine scroll cylinders are 1-based"));
                 }
-                source_node = nodes.len();
-                nodes.push(Node::Source(Box::new(SourceBc::new(
+                let bc = SourceBc::new(
                     port,
                     project.engine.geometry.clone(),
                     project.engine.valves.clone(),
@@ -204,13 +205,14 @@ pub fn build(project: &Project, gas: Gas, dx: f64, src: SourceInputs) -> Result<
                     src.rpm,
                     manifolds,
                     t.extraction_factor,
-                    &gas,
+                    &b.gas,
                     src.p_init,
                     src.t_init,
-                )?)));
+                )?;
+                source_node = b.node(Node::Source(Box::new(bc)));
             }
             ElementKind::Outlet => {
-                let port = port_of(&el.id, "in");
+                let port = b.port(el, "in");
                 let route = project
                     .system
                     .routes
@@ -224,52 +226,50 @@ pub fn build(project: &Project, gas: Gas, dx: f64, src: SourceInputs) -> Result<
                 } else {
                     scale(unit_start(&line.points), -1.0)
                 };
-                let area = ducts[port.duct].end_area(port.end);
+                let area = b.ducts[port.duct].end_area(port.end);
                 outlets.push(OutletInfo {
                     element: el.id.clone(),
-                    node: nodes.len(),
+                    node: b.nodes.len(),
                     position: scale(el.position_mm, 1e-3),
                     axis,
                     area,
                 });
-                nodes.push(Node::Radiation(RadiationBc {
+                b.node(Node::Radiation(RadiationBc {
                     port,
                     p_amb: project.ambient.pressure_pa,
                     t_amb: project.ambient.temperature_k,
                     radius: (area / std::f64::consts::PI).sqrt(),
                 }));
             }
-            ElementKind::Cap => nodes.push(Node::Wall(port_of(&el.id, "in"))),
             ElementKind::AreaChange { taper_length_mm } => {
                 if merged.contains(&el.id) {
                     continue;
                 }
-                let (pin, pout) = (port_of(&el.id, "in"), port_of(&el.id, "out"));
+                let (pin, pout) = (b.port(el, "in"), b.port(el, "out"));
                 if *taper_length_mm > 0.0 {
                     // A cone whose pipes do not run in→out: its own duct between two joints.
-                    let d_in = diameter(&ducts[pin.duct], pin.end);
-                    let d_out = diameter(&ducts[pout.duct], pout.end);
-                    let cone = ducts.len();
-                    ducts.push(Duct::conical(
+                    let (d_in, d_out) = (b.bore(pin), b.bore(pout));
+                    let cone = b.duct(Duct::conical(
                         format!("{} (cone)", el.id),
                         taper_length_mm * 1e-3,
                         d_in,
                         d_out,
                         dx,
                     ));
-                    nodes.push(junction(pin, Port::start(cone)));
-                    nodes.push(junction(Port::end(cone), pout));
+                    b.join(pin, Port::start(cone));
+                    b.join(Port::end(cone), pout);
                 } else {
-                    nodes.push(junction(pin, pout));
+                    b.join(pin, pout);
                 }
             }
+            _ => elements::build(el, &mut b)?,
         }
     }
-    let flow_share = flow_shares(&ducts, &nodes, source_node);
+    let flow_share = flow_shares(&b.ducts, &b.nodes, source_node);
     let network = Network {
-        gas,
-        ducts,
-        nodes,
+        gas: b.gas,
+        ducts: b.ducts,
+        nodes: b.nodes,
         limiter: project.solver.limiter,
         cfl: project.solver.cfl,
     };
@@ -280,23 +280,12 @@ pub fn build(project: &Project, gas: Gas, dx: f64, src: SourceInputs) -> Result<
         source_node,
         outlets,
         flow_share,
-        warnings,
+        warnings: b.warnings,
     })
 }
 
 fn unit_start(points: &[Vec3]) -> Vec3 {
     crate::geometry::unit(crate::geometry::sub(points[1], points[0]))
-}
-
-fn diameter(duct: &Duct, end: End) -> f64 {
-    (4.0 * duct.end_area(end) / std::f64::consts::PI).sqrt()
-}
-
-fn junction(a: Port, b: Port) -> Node {
-    Node::Junction(JunctionBc {
-        ports: vec![a, b],
-        kind: JunctionKind::AreaChange,
-    })
 }
 
 /// Steady mass-flow share of each duct on a tree rooted at the source: a duct carries the

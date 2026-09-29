@@ -3,6 +3,7 @@
 //! CI blocks on any failure.
 
 pub mod acoustic;
+pub mod crosscheck;
 pub mod duct;
 pub mod grid;
 pub mod outlet;
@@ -52,5 +53,6 @@ pub fn cases() -> Vec<Case> {
         ("stub", acoustic::quarter_wave_stub),
         ("helmholtz", acoustic::helmholtz),
         ("tee", acoustic::tee_junction),
+        ("crosscheck", crosscheck::run),
     ]
 }

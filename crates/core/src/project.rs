@@ -73,6 +73,13 @@ pub struct TurbineSpec {
     /// Fraction of the isentropic enthalpy drop across the turbine removed as shaft work.
     pub extraction_factor: f64,
     pub scrolls: Vec<ScrollSpec>,
+    /// Temperature the ports and housing reject heat to, K.
+    #[serde(default = "default_coolant")]
+    pub coolant_temperature_k: f64,
+}
+
+fn default_coolant() -> f64 {
+    363.15
 }
 
 #[derive(Clone, Debug, PartialEq, Serialize, Deserialize, JsonSchema)]
@@ -84,6 +91,9 @@ pub struct ScrollSpec {
     pub manifold_volume_l: f64,
     /// Effective nozzle area `C_d A` of the scroll including an open wastegate, cm².
     pub nozzle_area_cm2: f64,
+    /// Heat-loss conductance of ports, runners and turbine housing to the coolant, W/K.
+    #[serde(default)]
+    pub heat_loss_w_per_k: f64,
 }
 
 #[derive(Clone, Debug, PartialEq, Serialize, Deserialize, JsonSchema)]
@@ -102,8 +112,15 @@ pub struct Ambient {
     pub temperature_k: f64,
     /// Vehicle speed; sets the external film coefficient in the thermal model.
     pub vehicle_speed_kmh: f64,
+    /// Air speed across the pipes as a fraction of vehicle speed (underbody boundary layer).
+    #[serde(default = "default_underbody_air")]
+    pub underbody_air_factor: f64,
     /// Height of the ground plane in vehicle coordinates, mm (negative: below the flange).
     pub ground_z_mm: f64,
+}
+
+fn default_underbody_air() -> f64 {
+    0.5
 }
 
 #[derive(Clone, Debug, PartialEq, Serialize, Deserialize, JsonSchema)]
@@ -178,7 +195,8 @@ fn default_axis() -> Vec3 {
     [-1.0, 0.0, 0.0]
 }
 
-/// Element types. Each has fixed port names.
+/// Element types and their parameters. Port names are fixed per type (see
+/// [`ElementKind::port_names`]); pipes attach to ports by name.
 #[derive(Clone, Debug, PartialEq, Serialize, Deserialize, JsonSchema)]
 #[serde(tag = "type", rename_all = "snake_case", deny_unknown_fields)]
 pub enum ElementKind {
@@ -188,31 +206,213 @@ pub enum ElementKind {
     Outlet,
     /// Joins two pipes of different bore: sudden when `taper_length_mm` is 0, otherwise a
     /// cone of that length. Ports `in`, `out`; bores come from the connected pipes.
-    AreaChange { taper_length_mm: f64 },
+    AreaChange {
+        taper_length_mm: f64,
+    },
     /// Closed pipe end; port `in`.
     Cap,
+    ExpansionChamber(ExpansionChamber),
+    QuarterWaveStub(QuarterWaveStub),
+    Helmholtz(Helmholtz),
+    Catalyst(Catalyst),
+    Valve(Valve),
+    Tee(Tee),
+}
+
+fn default_shell() -> f64 {
+    1.2
+}
+
+fn down() -> Vec3 {
+    [0.0, 0.0, -1.0]
+}
+
+/// Simple expansion chamber (reactive muffler) with optional inlet and outlet tubes extending
+/// into it. Ports: `in` at `position_mm`, `out` at `position_mm + axis·length_mm`, and `out2`,
+/// `out3`, … at `extra_outlets_mm` (offsets from `out`) for multi-outlet mufflers. Pipe bores
+/// come from the connected routes.
+#[derive(Clone, Debug, PartialEq, Serialize, Deserialize, JsonSchema)]
+#[serde(deny_unknown_fields)]
+pub struct ExpansionChamber {
+    /// Inner diameter of the shell, mm.
+    pub diameter_mm: f64,
+    pub length_mm: f64,
+    #[serde(default)]
+    pub inlet_extension_mm: f64,
+    #[serde(default)]
+    pub outlet_extension_mm: f64,
+    /// Shell thickness, mm (heat loss and fabrication).
+    #[serde(default = "default_shell")]
+    pub shell_mm: f64,
+    #[serde(default, skip_serializing_if = "Vec::is_empty")]
+    pub extra_outlets_mm: Vec<Vec3>,
+}
+
+/// Closed side branch (quarter-wave resonator) teed onto the main pipe. Ports `in` and `out`
+/// both at `position_mm`; the branch leaves along `direction`.
+#[derive(Clone, Debug, PartialEq, Serialize, Deserialize, JsonSchema)]
+#[serde(deny_unknown_fields)]
+pub struct QuarterWaveStub {
+    pub id_mm: f64,
+    pub wall_mm: f64,
+    /// Physical length from the main-pipe wall to the cap, mm.
+    pub length_mm: f64,
+    pub material: String,
+    #[serde(default = "down")]
+    pub direction: Vec3,
+}
+
+/// Helmholtz resonator teed onto the main pipe: a neck into a cylindrical cavity. Ports `in`
+/// and `out` both at `position_mm`; the neck leaves along `direction`.
+#[derive(Clone, Debug, PartialEq, Serialize, Deserialize, JsonSchema)]
+#[serde(deny_unknown_fields)]
+pub struct Helmholtz {
+    pub neck_id_mm: f64,
+    /// Physical neck length, mm.
+    pub neck_length_mm: f64,
+    pub volume_l: f64,
+    pub cavity_diameter_mm: f64,
+    #[serde(default = "down")]
+    pub direction: Vec3,
+}
+
+/// Monolith catalyst: inlet cone, brick of square channels, outlet cone. Ports `in` at
+/// `position_mm` and `out` at `position_mm + axis·(inlet cone + brick + outlet cone)`.
+#[derive(Clone, Debug, PartialEq, Serialize, Deserialize, JsonSchema)]
+#[serde(deny_unknown_fields)]
+pub struct Catalyst {
+    /// Cells per square inch.
+    pub cpsi: f64,
+    /// Cell wall thickness, mm (4 mil = 0.1016 mm).
+    pub cell_wall_mm: f64,
+    pub brick_length_mm: f64,
+    pub brick_diameter_mm: f64,
+    #[serde(default)]
+    pub inlet_cone_mm: f64,
+    #[serde(default)]
+    pub outlet_cone_mm: f64,
+}
+
+/// Butterfly valve (electric cutout or exhaust flap). Ports `in` and `out` at `position_mm`.
+#[derive(Clone, Debug, PartialEq, Serialize, Deserialize, JsonSchema)]
+#[serde(deny_unknown_fields)]
+pub struct Valve {
+    /// Disc opening: 0° closed, 90° fully open.
+    pub angle_deg: f64,
+}
+
+/// Tee or wye junction. Ports `in`, `out` and `branch`, all at `position_mm`.
+#[derive(Clone, Debug, PartialEq, Serialize, Deserialize, JsonSchema)]
+#[serde(deny_unknown_fields)]
+pub struct Tee {
+    #[serde(default = "down")]
+    pub branch_direction: Vec3,
 }
 
 impl ElementKind {
-    pub fn port_names(&self) -> &'static [&'static str] {
-        match self {
+    pub fn port_names(&self) -> Vec<String> {
+        let names: &[&str] = match self {
             ElementKind::Source => &["out"],
             ElementKind::Outlet | ElementKind::Cap => &["in"],
-            ElementKind::AreaChange { .. } => &["in", "out"],
-        }
+            ElementKind::Tee(_) => &["in", "out", "branch"],
+            ElementKind::ExpansionChamber(c) => {
+                let mut v = vec!["in".to_string(), "out".to_string()];
+                v.extend((0..c.extra_outlets_mm.len()).map(|k| format!("out{}", k + 2)));
+                return v;
+            }
+            _ => &["in", "out"],
+        };
+        names.iter().map(|s| s.to_string()).collect()
+    }
+
+    pub fn has_port(&self, port: &str) -> bool {
+        self.port_names().iter().any(|p| p == port)
     }
 }
 
 impl Element {
     /// Position of a named port, mm.
     pub fn port_position(&self, port: &str) -> Option<Vec3> {
+        if !self.kind.has_port(port) {
+            return None;
+        }
         let axis = unit(self.axis);
-        match (&self.kind, port) {
-            (ElementKind::AreaChange { taper_length_mm }, "out") => {
-                Some(add(self.position_mm, scale(axis, *taper_length_mm)))
+        let along = |len: f64| add(self.position_mm, scale(axis, len));
+        Some(match (&self.kind, port) {
+            (ElementKind::AreaChange { taper_length_mm }, "out") => along(*taper_length_mm),
+            (ElementKind::ExpansionChamber(c), "out") => along(c.length_mm),
+            (ElementKind::ExpansionChamber(c), p) if p.starts_with("out") => {
+                let k: usize = p[3..].parse().ok()?;
+                add(along(c.length_mm), *c.extra_outlets_mm.get(k - 2)?)
             }
-            (kind, p) if kind.port_names().contains(&p) => Some(self.position_mm),
-            _ => None,
+            (ElementKind::Catalyst(c), "out") => {
+                along(c.inlet_cone_mm + c.brick_length_mm + c.outlet_cone_mm)
+            }
+            _ => self.position_mm,
+        })
+    }
+
+    /// Physical consistency of the element's parameters.
+    pub fn validate(&self, project: &Project) -> Result<()> {
+        let bad = |msg: &str| Err(Error::invalid(format!("element '{}': {msg}", self.id)));
+        match &self.kind {
+            ElementKind::AreaChange { taper_length_mm } if *taper_length_mm < 0.0 => {
+                bad("taper length must be ≥ 0")
+            }
+            ElementKind::ExpansionChamber(c) => {
+                if c.diameter_mm <= 0.0 || c.shell_mm <= 0.0 {
+                    return bad("diameter and shell must be > 0");
+                }
+                if c.inlet_extension_mm < 0.0
+                    || c.outlet_extension_mm < 0.0
+                    || c.inlet_extension_mm + c.outlet_extension_mm >= c.length_mm
+                {
+                    return bad("tube extensions must be ≥ 0 and leave part of the chamber open");
+                }
+                if !c.extra_outlets_mm.is_empty() && c.outlet_extension_mm > 0.0 {
+                    return bad("outlet extensions are modelled for single-outlet chambers only");
+                }
+                Ok(())
+            }
+            ElementKind::QuarterWaveStub(s) => {
+                if s.id_mm <= 0.0 || s.wall_mm <= 0.0 || s.length_mm <= 0.0 {
+                    return bad("stub bore, wall and length must be > 0");
+                }
+                if project.material(&s.material).is_none() {
+                    return bad("unknown stub material");
+                }
+                Ok(())
+            }
+            ElementKind::Helmholtz(h) => {
+                if h.neck_id_mm <= 0.0 || h.neck_length_mm <= 0.0 || h.volume_l <= 0.0 {
+                    return bad("neck bore, neck length and volume must be > 0");
+                }
+                if h.cavity_diameter_mm <= h.neck_id_mm {
+                    return bad("cavity must be wider than the neck");
+                }
+                Ok(())
+            }
+            ElementKind::Catalyst(c) => {
+                let pitch = 25.4 / c.cpsi.sqrt();
+                if !(50.0..=1500.0).contains(&c.cpsi)
+                    || c.cell_wall_mm <= 0.0
+                    || c.cell_wall_mm >= 0.5 * pitch
+                {
+                    return bad("cpsi must be 50–1500 and the cell wall under half the cell pitch");
+                }
+                if c.brick_length_mm <= 0.0
+                    || c.brick_diameter_mm <= 0.0
+                    || c.inlet_cone_mm < 0.0
+                    || c.outlet_cone_mm < 0.0
+                {
+                    return bad("brick size must be > 0 and cone lengths ≥ 0");
+                }
+                Ok(())
+            }
+            ElementKind::Valve(v) if !(0.0..=90.0).contains(&v.angle_deg) => {
+                bad("valve angle must be 0–90°")
+            }
+            _ => Ok(()),
         }
     }
 }
@@ -277,6 +477,8 @@ pub enum WallThermal {
     Adiabatic,
     /// Every wall at one temperature.
     Fixed { temperature_k: f64 },
+    /// Walls and initial gas from the quasi-steady thermal model (`thermal`).
+    Computed,
 }
 
 #[derive(Clone, Debug, PartialEq, Serialize, Deserialize, JsonSchema)]
@@ -416,7 +618,7 @@ impl Project {
                         r.id, pr.element
                     ))
                 })?;
-                if !e.kind.port_names().contains(&pr.port.as_str()) {
+                if !e.kind.has_port(&pr.port) {
                     return Err(Error::invalid(format!(
                         "route '{}': element '{}' has no port '{}'",
                         r.id, pr.element, pr.port
@@ -449,10 +651,11 @@ impl Project {
             }
         }
         for e in &self.system.elements {
+            e.validate(self)?;
             for p in e.kind.port_names() {
                 let pr = PortRef {
                     element: e.id.clone(),
-                    port: (*p).to_string(),
+                    port: p.clone(),
                 };
                 if !used.contains_key(&pr) {
                     return Err(Error::invalid(format!(

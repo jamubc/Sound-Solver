@@ -141,7 +141,17 @@ pub fn duct_matrix(net: &Network, mean: &MeanState, d: usize, omega: f64) -> M2 
         let s = duct.volume[i] / duct.dx;
         let r = 0.5 * duct.diameter[i];
         let mach = m.u / m.c;
-        let (mut alpha_v, mut alpha_r) = (0.0, duct.k_loss[i] * m.u.abs() / (2.0 * m.c * duct.dx));
+        let alpha_k = duct.k_loss[i] * m.u.abs() / (2.0 * m.c * duct.dx);
+        if let (Some(fre), true) = (duct.channel, duct.friction) {
+            // Radius whose Poiseuille resistance 8μ/r² equals the channel's 2(fRe)μ/D_h².
+            let r_eff = 2.0 * duct.diameter[i] / fre.sqrt();
+            acc = mul(
+                &channel_cell(gas, m, r_eff, s, duct.dx, omega, alpha_k),
+                &acc,
+            );
+            continue;
+        }
+        let (mut alpha_v, mut alpha_r) = (0.0, alpha_k);
         if duct.friction {
             let gamma = gas.gamma(m.t);
             let mu = gas.viscosity(m.t);
@@ -173,6 +183,44 @@ pub fn duct_matrix(net: &Network, mean: &MeanState, d: usize, omega: f64) -> M2 
         acc = mul(&mul(&mul(&c_mat, &p), &c_inv), &acc);
     }
     acc
+}
+
+/// Viscothermal function of a circular tube, `F(s) = 2 J₁(σ)/(σ J₀(σ))`, `σ = s √(−j)`
+/// (Zwikker & Kosten 1949; Tijdeman 1975 low-reduced-frequency model).
+fn zk_function(s: f64) -> C64 {
+    let sigma = s * C64::from_polar(1.0, -std::f64::consts::FRAC_PI_4);
+    let (j0, j1) = crate::math::bessel_j01_complex(sigma);
+    2.0 * j1 / (sigma * j0)
+}
+
+/// Start-to-end matrix of one cell of a laminar channel bundle (catalyst brick) with no mean
+/// convection: effective density `ρ/(1 − F(s))` and compressibility
+/// `(1 + (γ − 1)F(s√Pr))/(γp)`, `s = r √(ωρ/μ)`, with the circular-tube functions at the
+/// radius `r` that reproduces the channel's Poiseuille resistance (Stinson & Champoux 1992
+/// shape-factor approach). Its low-frequency limit is the time-domain channel friction.
+/// `alpha_k` adds the linearised entrance loss.
+fn channel_cell(
+    gas: &crate::gas::Gas,
+    m: &CellMean,
+    r: f64,
+    area: f64,
+    dx: f64,
+    omega: f64,
+    alpha_k: f64,
+) -> M2 {
+    let gamma = gas.gamma(m.t);
+    let mu = gas.viscosity(m.t);
+    let p0 = m.rho * gas.r() * m.t;
+    let s = r * (omega * m.rho / mu).sqrt();
+    let rho_e = m.rho / (1.0 - zk_function(s));
+    let comp = (1.0 + (gamma - 1.0) * zk_function(s * gas.prandtl().sqrt())) / (gamma * p0);
+    // Z = ωρ_e/k pairs with either root of k; the matrix is even in (k, Z).
+    let k0 = omega * (rho_e * comp).sqrt();
+    let zm = omega * rho_e / k0 / (m.rho * area);
+    let k = k0 - C64::new(0.0, alpha_k);
+    let (cs, sn) = ((k * dx).cos(), (k * dx).sin());
+    let j = C64::new(0.0, 1.0);
+    [[cs, -j * zm * sn], [-j * sn / zm, cs]]
 }
 
 /// A port's `p` and `q` (toward the node) as linear forms in the unknowns

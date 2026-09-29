@@ -84,6 +84,12 @@
           "type": "number",
           "format": "double"
         },
+        "underbody_air_factor": {
+          "description": "Air speed across the pipes as a fraction of vehicle speed (underbody boundary layer).",
+          "type": "number",
+          "format": "double",
+          "default": 0.5
+        },
         "vehicle_speed_kmh": {
           "description": "Vehicle speed; sets the external film coefficient in the thermal model.",
           "type": "number",
@@ -129,7 +135,7 @@
       ]
     },
     "Element": {
-      "description": "Element types. Each has fixed port names.",
+      "description": "Element types and their parameters. Port names are fixed per type (see\n[`ElementKind::port_names`]); pipes attach to ports by name.",
       "type": "object",
       "properties": {
         "axis": {
@@ -213,6 +219,244 @@
             "type": {
               "type": "string",
               "const": "cap"
+            }
+          },
+          "required": [
+            "type"
+          ]
+        },
+        {
+          "description": "Simple expansion chamber (reactive muffler) with optional inlet and outlet tubes extending\ninto it. Ports: `in` at `position_mm`, `out` at `position_mm + axis·length_mm`, and `out2`,\n`out3`, … at `extra_outlets_mm` (offsets from `out`) for multi-outlet mufflers. Pipe bores\ncome from the connected routes.",
+          "type": "object",
+          "properties": {
+            "diameter_mm": {
+              "description": "Inner diameter of the shell, mm.",
+              "type": "number",
+              "format": "double"
+            },
+            "extra_outlets_mm": {
+              "type": "array",
+              "items": {
+                "type": "array",
+                "items": {
+                  "type": "number",
+                  "format": "double"
+                },
+                "maxItems": 3,
+                "minItems": 3
+              }
+            },
+            "inlet_extension_mm": {
+              "type": "number",
+              "format": "double",
+              "default": 0.0
+            },
+            "length_mm": {
+              "type": "number",
+              "format": "double"
+            },
+            "outlet_extension_mm": {
+              "type": "number",
+              "format": "double",
+              "default": 0.0
+            },
+            "shell_mm": {
+              "description": "Shell thickness, mm (heat loss and fabrication).",
+              "type": "number",
+              "format": "double",
+              "default": 1.2
+            },
+            "type": {
+              "type": "string",
+              "const": "expansion_chamber"
+            }
+          },
+          "required": [
+            "type",
+            "diameter_mm",
+            "length_mm"
+          ]
+        },
+        {
+          "description": "Closed side branch (quarter-wave resonator) teed onto the main pipe. Ports `in` and `out`\nboth at `position_mm`; the branch leaves along `direction`.",
+          "type": "object",
+          "properties": {
+            "direction": {
+              "type": "array",
+              "default": [
+                0.0,
+                0.0,
+                -1.0
+              ],
+              "items": {
+                "type": "number",
+                "format": "double"
+              },
+              "maxItems": 3,
+              "minItems": 3
+            },
+            "id_mm": {
+              "type": "number",
+              "format": "double"
+            },
+            "length_mm": {
+              "description": "Physical length from the main-pipe wall to the cap, mm.",
+              "type": "number",
+              "format": "double"
+            },
+            "material": {
+              "type": "string"
+            },
+            "type": {
+              "type": "string",
+              "const": "quarter_wave_stub"
+            },
+            "wall_mm": {
+              "type": "number",
+              "format": "double"
+            }
+          },
+          "required": [
+            "type",
+            "id_mm",
+            "wall_mm",
+            "length_mm",
+            "material"
+          ]
+        },
+        {
+          "description": "Helmholtz resonator teed onto the main pipe: a neck into a cylindrical cavity. Ports `in`\nand `out` both at `position_mm`; the neck leaves along `direction`.",
+          "type": "object",
+          "properties": {
+            "cavity_diameter_mm": {
+              "type": "number",
+              "format": "double"
+            },
+            "direction": {
+              "type": "array",
+              "default": [
+                0.0,
+                0.0,
+                -1.0
+              ],
+              "items": {
+                "type": "number",
+                "format": "double"
+              },
+              "maxItems": 3,
+              "minItems": 3
+            },
+            "neck_id_mm": {
+              "type": "number",
+              "format": "double"
+            },
+            "neck_length_mm": {
+              "description": "Physical neck length, mm.",
+              "type": "number",
+              "format": "double"
+            },
+            "type": {
+              "type": "string",
+              "const": "helmholtz"
+            },
+            "volume_l": {
+              "type": "number",
+              "format": "double"
+            }
+          },
+          "required": [
+            "type",
+            "neck_id_mm",
+            "neck_length_mm",
+            "volume_l",
+            "cavity_diameter_mm"
+          ]
+        },
+        {
+          "description": "Monolith catalyst: inlet cone, brick of square channels, outlet cone. Ports `in` at\n`position_mm` and `out` at `position_mm + axis·(inlet cone + brick + outlet cone)`.",
+          "type": "object",
+          "properties": {
+            "brick_diameter_mm": {
+              "type": "number",
+              "format": "double"
+            },
+            "brick_length_mm": {
+              "type": "number",
+              "format": "double"
+            },
+            "cell_wall_mm": {
+              "description": "Cell wall thickness, mm (4 mil = 0.1016 mm).",
+              "type": "number",
+              "format": "double"
+            },
+            "cpsi": {
+              "description": "Cells per square inch.",
+              "type": "number",
+              "format": "double"
+            },
+            "inlet_cone_mm": {
+              "type": "number",
+              "format": "double",
+              "default": 0.0
+            },
+            "outlet_cone_mm": {
+              "type": "number",
+              "format": "double",
+              "default": 0.0
+            },
+            "type": {
+              "type": "string",
+              "const": "catalyst"
+            }
+          },
+          "required": [
+            "type",
+            "cpsi",
+            "cell_wall_mm",
+            "brick_length_mm",
+            "brick_diameter_mm"
+          ]
+        },
+        {
+          "description": "Butterfly valve (electric cutout or exhaust flap). Ports `in` and `out` at `position_mm`.",
+          "type": "object",
+          "properties": {
+            "angle_deg": {
+              "description": "Disc opening: 0° closed, 90° fully open.",
+              "type": "number",
+              "format": "double"
+            },
+            "type": {
+              "type": "string",
+              "const": "valve"
+            }
+          },
+          "required": [
+            "type",
+            "angle_deg"
+          ]
+        },
+        {
+          "description": "Tee or wye junction. Ports `in`, `out` and `branch`, all at `position_mm`.",
+          "type": "object",
+          "properties": {
+            "branch_direction": {
+              "type": "array",
+              "default": [
+                0.0,
+                0.0,
+                -1.0
+              ],
+              "items": {
+                "type": "number",
+                "format": "double"
+              },
+              "maxItems": 3,
+              "minItems": 3
+            },
+            "type": {
+              "type": "string",
+              "const": "tee"
             }
           },
           "required": [
@@ -679,6 +923,12 @@
             "minimum": 0
           }
         },
+        "heat_loss_w_per_k": {
+          "description": "Heat-loss conductance of ports, runners and turbine housing to the coolant, W/K.",
+          "type": "number",
+          "format": "double",
+          "default": 0.0
+        },
         "manifold_volume_l": {
           "description": "Volume of exhaust ports, manifold runners and scroll, litres.",
           "type": "number",
@@ -790,6 +1040,12 @@
     "TurbineSpec": {
       "type": "object",
       "properties": {
+        "coolant_temperature_k": {
+          "description": "Temperature the ports and housing reject heat to, K.",
+          "type": "number",
+          "format": "double",
+          "default": 363.15
+        },
         "extraction_factor": {
           "description": "Fraction of the isentropic enthalpy drop across the turbine removed as shaft work.",
           "type": "number",
@@ -842,6 +1098,20 @@
           "required": [
             "model",
             "temperature_k"
+          ]
+        },
+        {
+          "description": "Walls and initial gas from the quasi-steady thermal model (`thermal`).",
+          "type": "object",
+          "properties": {
+            "model": {
+              "type": "string",
+              "const": "computed"
+            }
+          },
+          "additionalProperties": false,
+          "required": [
+            "model"
           ]
         }
       ]

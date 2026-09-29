@@ -31,7 +31,7 @@ pub fn run() -> Result<Vec<Check>> {
     for rpm in RPMS {
         let (a, b) = (solve_point(&base, rpm)?, solve_point(&fine, rpm)?);
         for (r, dx) in [(&a, base.solver.dx_mm), (&b, fine.solver.dx_mm)] {
-            if !r.provenance.converged {
+            if !r.provenance.converged() {
                 return Err(Error::solver(format!(
                     "grid case did not converge at {rpm} rpm, Δx = {dx} mm"
                 )));
@@ -44,10 +44,14 @@ pub fn run() -> Result<Vec<Check>> {
             (second_order(&a)? - second_order(&b)?).abs(),
             0.5,
         ));
+        let (bp_a, bp_b) = (
+            a.backpressure_pa.unwrap_or(f64::NAN),
+            b.backpressure_pa.unwrap_or(f64::NAN),
+        );
         checks.push(Check::new(
             case,
             format!("backpressure relative change ({rpm} rpm)"),
-            ((a.backpressure_pa - b.backpressure_pa) / b.backpressure_pa).abs(),
+            ((bp_a - bp_b) / bp_b).abs(),
             0.01,
         ));
     }

@@ -103,6 +103,30 @@ pub fn bessel_k1_scaled(x: f64) -> f64 {
     }
 }
 
+/// Bessel functions `(J₀(z), J₁(z))` of complex argument by their power series
+/// `J₀ = Σ (−z²/4)ᵏ/(k!)²`, `J₁ = (z/2) Σ (−z²/4)ᵏ/(k!(k+1)!)`; accurate for `|z| ≲ 30`.
+pub fn bessel_j01_complex(
+    z: rustfft::num_complex::Complex64,
+) -> (
+    rustfft::num_complex::Complex64,
+    rustfft::num_complex::Complex64,
+) {
+    let q = -z * z / 4.0;
+    let (mut t0, mut t1) = (rustfft::num_complex::Complex64::new(1.0, 0.0), z / 2.0);
+    let (mut j0, mut j1) = (t0, t1);
+    for k in 1..400 {
+        let k = k as f64;
+        t0 *= q / (k * k);
+        t1 *= q / (k * (k + 1.0));
+        j0 += t0;
+        j1 += t1;
+        if t0.norm() <= 1e-17 * j0.norm() && t1.norm() <= 1e-17 * j1.norm() {
+            break;
+        }
+    }
+    (j0, j1)
+}
+
 /// Gauss–Legendre nodes and weights on [−1, 1] (Newton iteration on Pₙ).
 pub fn gauss_legendre(n: usize) -> (Vec<f64>, Vec<f64>) {
     let mut x = vec![0.0; n];

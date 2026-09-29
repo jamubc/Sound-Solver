@@ -4,10 +4,18 @@
 use std::path::PathBuf;
 use std::process::ExitCode;
 
-use clap::{Parser, Subcommand};
+use clap::{Parser, Subcommand, ValueEnum};
 use exhaust_core::project::{Project, sweep_points};
-use exhaust_core::solve::solve_sweep;
+use exhaust_core::solve::{SolverKind, sweep};
 use exhaust_core::validation::cases;
+
+#[derive(Clone, Copy, ValueEnum)]
+enum Solver {
+    /// Nonlinear time-domain gas dynamics (the reference result).
+    TimeDomain,
+    /// Linear four-pole preview.
+    FourPole,
+}
 
 #[derive(Parser)]
 #[command(
@@ -22,13 +30,15 @@ struct Cli {
 
 #[derive(Subcommand)]
 enum Command {
-    /// Solve a project over an engine-speed sweep with the time-domain solver; prints JSON.
+    /// Solve a project over an engine-speed sweep; prints JSON.
     Solve {
         /// Project file (JSON).
         project: PathBuf,
         /// Engine speeds as `start:stop:step` rpm; defaults to the project's sweep.
         #[arg(long)]
         sweep: Option<String>,
+        #[arg(long, value_enum, default_value = "time-domain")]
+        solver: Solver,
         /// Write the result here instead of standard output.
         #[arg(long, short)]
         out: Option<PathBuf>,
@@ -58,17 +68,22 @@ fn run(cli: Cli) -> Result<ExitCode, String> {
     match cli.command {
         Command::Solve {
             project,
-            sweep,
+            sweep: rpm_sweep,
+            solver,
             out,
         } => {
             let text = std::fs::read_to_string(&project)
                 .map_err(|e| format!("{}: {e}", project.display()))?;
             let project = Project::from_json(&text).map_err(|e| e.to_string())?;
-            let rpms = match sweep {
+            let rpms = match rpm_sweep {
                 Some(s) => parse_sweep(&s)?,
                 None => project.operating.sweep(),
             };
-            let result = solve_sweep(&project, &rpms);
+            let kind = match solver {
+                Solver::TimeDomain => SolverKind::TimeDomain,
+                Solver::FourPole => SolverKind::FourPole,
+            };
+            let result = sweep(&project, &rpms, kind);
             let json = serde_json::to_string_pretty(&result).expect("results serialise");
             match out {
                 Some(path) => {

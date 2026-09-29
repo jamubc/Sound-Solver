@@ -439,10 +439,12 @@ pub struct MassFlowBc {
 pub(crate) fn mass_flow(gas: &Gas, ps: &PortState, bc: &MassFlowBc, t: f64) -> Result<FaceState> {
     let mdot = bc.mdot.at(t);
     let h00 = gas.h(bc.t0);
-    let face = |pb: f64| {
+    // Inflow density at the stagnation temperature keeps the residual monotone in p_b over
+    // the whole bracket; the kinetic correction is applied to the final state.
+    let face = |pb: f64, t_in: f64| {
         let v = ps.v - wave_f(pb, ps.rho, ps.p, ps.c, ps.gamma).0;
         let rho = if mdot > 0.0 {
-            pb / (gas.r() * gas.t_from_h(h00 - 0.5 * v * v))
+            pb / (gas.r() * t_in)
         } else {
             wave_rho(pb, ps.rho, ps.p, ps.gamma)
         };
@@ -450,7 +452,7 @@ pub(crate) fn mass_flow(gas: &Gas, ps: &PortState, bc: &MassFlowBc, t: f64) -> R
     };
     let pb = brent(
         |pb| {
-            let (v, rho) = face(pb);
+            let (v, rho) = face(pb, bc.t0);
             rho * v * ps.area + mdot
         },
         0.05 * ps.p,
@@ -459,7 +461,8 @@ pub(crate) fn mass_flow(gas: &Gas, ps: &PortState, bc: &MassFlowBc, t: f64) -> R
         200,
     )
     .ok_or_else(|| Error::solver("mass-flow boundary: no face pressure found"))?;
-    let (v, rho) = face(pb);
+    let v0 = face(pb, bc.t0).0;
+    let (v, rho) = face(pb, gas.t_from_h(h00 - 0.5 * v0 * v0));
     let h0 = if mdot > 0.0 {
         h00
     } else {
@@ -494,12 +497,16 @@ pub struct Manifold {
     pub volume: f64,
     /// Effective nozzle area `C_d A` of the scroll (plus open wastegate), m².
     pub turbine_area: f64,
+    /// Heat loss to the cooled ports and housing: `Q̇ = UA (T_M − T_coolant)`, W/K.
+    pub ua: f64,
+    pub t_coolant: f64,
 }
 
 /// Engine exhaust source feeding the start of the downpipe.
 ///
-/// Manifolds are adiabatic filling-and-emptying volumes:
-/// `dm/dt = Σ ṁ_valve − ṁ_turbine`, `dU/dt = Σ ṁ_valve h_in − ṁ_turbine h_out`,
+/// Manifolds are filling-and-emptying volumes losing heat to the cooled ports and housing:
+/// `dm/dt = Σ ṁ_valve − ṁ_turbine`,
+/// `dU/dt = Σ ṁ_valve h_in − ṁ_turbine h_out − UA (T_M − T_coolant)`,
 /// `p = m R T / V`, `U = m e(T)`.
 /// Each scroll discharges through a quasi-steady isentropic nozzle to the downpipe face
 /// pressure `p_b`. The turbine removes the fraction `extraction` of the isentropic enthalpy drop
@@ -642,48 +649,256 @@ impl SourceBc {
         (m * gas.r() * t / self.manifolds[j].volume, t)
     }
 
-    pub(crate) fn eval(&self, gas: &Gas, t: f64, ps: &PortState, st: &mut NodeState) -> Result<()> {
-        let n = self.geometry.cylinders();
+    /// Mass flow of cylinder `k`'s valves into its manifold at manifold state `(pm, tm)` and
+    /// mass `m_man`, and the stagnation enthalpy it carries. Zero while the valve is shut.
+    ///
+    /// Overshoot limit: the orifice conductance `∂ṁ/∂Δp ∝ 1/√Δp` is unbounded as the two
+    /// pressures meet, which explicit integration cannot follow. Over a step `Δt` no more mass
+    /// moves than equalises them, `|ṁ| ≤ |Δp| / (Δt (1/C_cyl + 1/C_man))` with compliances
+    /// `C = dm/dp` (`m/(n p)` polytropic cylinder, `m/(γ p)` manifold). Far from equilibrium it
+    /// never binds; near it, it gives the instant equalisation a large valve produces.
+    #[allow(clippy::too_many_arguments)]
+    fn valve_flow(
+        &self,
+        gas: &Gas,
+        k: usize,
+        t: f64,
+        m_cyl: f64,
+        pm: f64,
+        tm: f64,
+        m_man: f64,
+        dt: f64,
+    ) -> (f64, f64) {
         let r = gas.r();
-        st.deriv.iter_mut().for_each(|d| *d = 0.0);
-        let man: Vec<(f64, f64)> = (0..self.manifolds.len())
-            .map(|j| self.manifold_state(gas, &st.ode, j))
-            .collect();
+        let th = self.cylinder_angle(k, t);
+        let area = self.valves.effective_area(th);
+        if area == 0.0 {
+            return (0.0, 0.0);
+        }
+        let rho = m_cyl / self.geometry.volume(th);
+        let pc = self.evo.pressure_pa * (rho / self.rho_evo).powf(self.n_poly);
+        let tc = pc / (rho * r);
+        let (mdot, h) = if pc >= pm {
+            (
+                area * nozzle_mass_flux(pc, tc, pm, gas.gamma(tc), r),
+                gas.h(tc),
+            )
+        } else {
+            (
+                -area * nozzle_mass_flux(pm, tm, pc, gas.gamma(tm), r),
+                gas.h(tm),
+            )
+        };
+        if dt > 0.0 {
+            let inv_c = self.n_poly * pc / m_cyl + gas.gamma(tm) * pm / m_man;
+            let cap = (pc - pm).abs() / (dt * inv_c);
+            return (mdot.clamp(-cap, cap), h);
+        }
+        (mdot, h)
+    }
 
-        // Exhaust valves: cylinder ↔ manifold.
+    /// Valve flows into the ODE derivative (cylinder masses, manifold mass and energy).
+    fn valve_derivatives(
+        &self,
+        gas: &Gas,
+        t: f64,
+        dt: f64,
+        st: &mut NodeState,
+        man: &[(f64, f64)],
+    ) {
+        let n = self.geometry.cylinders();
+        st.deriv.iter_mut().for_each(|d| *d = 0.0);
         for k in 0..n {
             if st.cyl_phase[k] != CylPhase::Open {
                 continue;
             }
-            let th = self.cylinder_angle(k, t);
-            let area = self.valves.effective_area(th);
-            if area == 0.0 {
-                continue;
-            }
             let j = self.cyl_manifold[k];
-            let rho = st.ode[k] / self.geometry.volume(th);
-            let pc = self.evo.pressure_pa * (rho / self.rho_evo).powf(self.n_poly);
-            let tc = pc / (rho * r);
-            let (pm, tm) = man[j];
-            let (mdot, h) = if pc >= pm {
-                (
-                    area * nozzle_mass_flux(pc, tc, pm, gas.gamma(tc), r),
-                    gas.h(tc),
-                )
-            } else {
-                (
-                    -area * nozzle_mass_flux(pm, tm, pc, gas.gamma(tm), r),
-                    gas.h(tm),
-                )
-            };
+            let m_man = st.ode[n + 2 * j];
+            let (mdot, h) = self.valve_flow(gas, k, t, st.ode[k], man[j].0, man[j].1, m_man, dt);
             st.deriv[k] = -mdot;
             st.deriv[n + 2 * j] += mdot;
             st.deriv[n + 2 * j + 1] += mdot * h;
         }
+    }
+
+    /// Scroll `j` nozzle: mass flow toward the downpipe at face pressure `pb`, the enthalpy
+    /// the manifold loses per unit mass, the stagnation enthalpy delivered, and turbine power.
+    /// Reverse flow draws downpipe gas at stagnation `(p0_back, t0_back, h0_back)`. The same
+    /// overshoot limit as [`Self::valve_flow`] with the manifold compliance, the downpipe side
+    /// taken as a reservoir.
+    #[allow(clippy::too_many_arguments)]
+    fn nozzle_flow(
+        &self,
+        gas: &Gas,
+        j: usize,
+        pm: f64,
+        tm: f64,
+        m_man: f64,
+        pb: f64,
+        back: (f64, f64, f64),
+        dt: f64,
+    ) -> (f64, f64, f64, f64) {
+        let r = gas.r();
+        let area = self.manifolds[j].turbine_area;
+        let cap = if dt > 0.0 {
+            (pm - pb).abs() * m_man / (gas.gamma(tm) * pm * dt)
+        } else {
+            f64::INFINITY
+        };
+        if pm >= pb {
+            let g = gas.gamma(tm);
+            let mdot = (area * nozzle_mass_flux(pm, tm, pb, g, r)).min(cap);
+            let hm = gas.h(tm);
+            let h0 = hm - self.extraction * (hm - gas.h(tm * (pb / pm).powf((g - 1.0) / g)));
+            (mdot, hm, h0, mdot * (hm - h0))
+        } else {
+            let (p0, t0, h0) = back;
+            (
+                -(area * nozzle_mass_flux(p0, t0, pm, gas.gamma(t0), r)).min(cap),
+                h0,
+                h0,
+                0.0,
+            )
+        }
+    }
+
+    /// Norton equivalent of the source seen from the downpipe face: the engine runs
+    /// `cycles` cycles into a constant face pressure `pb` (reverse flow draws gas at `t_back`),
+    /// sampled `n` times per cycle over the last cycle. The short-circuit mass flow's harmonics
+    /// are the Norton strength; the admittance linearises nozzle, manifold compliance and valve
+    /// conductance about the cycle average (see [`NortonSource::admittance`]).
+    pub fn norton(
+        &self,
+        gas: &Gas,
+        pb: f64,
+        t_back: f64,
+        cycles: usize,
+        n: usize,
+    ) -> Result<NortonSource> {
+        let mut st = NodeState {
+            faces: vec![FaceState::default()],
+            ..Default::default()
+        };
+        self.init_state(gas, &mut st);
+        let ncyl = self.geometry.cylinders();
+        let nm = self.manifolds.len();
+        let cycle = 120.0 / self.rpm;
+        // Steps of about 20 µs, the time-domain solver's order of magnitude.
+        let sub = ((cycle / (n as f64 * 2e-5)).ceil() as usize).max(1);
+        let dt = cycle / (n * sub) as f64;
+        let back = (pb, t_back, gas.h(t_back));
+        let manifolds = |st: &NodeState| {
+            (0..nm)
+                .map(|j| self.manifold_state(gas, &st.ode, j))
+                .collect::<Vec<_>>()
+        };
+        let deriv = |st: &mut NodeState, t: f64| -> f64 {
+            let man = manifolds(st);
+            self.valve_derivatives(gas, t, dt, st, &man);
+            let mut net = 0.0;
+            for (j, m) in self.manifolds.iter().enumerate() {
+                let m_man = st.ode[ncyl + 2 * j];
+                let (mdot, hm, _, _) =
+                    self.nozzle_flow(gas, j, man[j].0, man[j].1, m_man, pb, back, dt);
+                st.deriv[ncyl + 2 * j] -= mdot;
+                st.deriv[ncyl + 2 * j + 1] -= mdot * hm + m.ua * (man[j].1 - m.t_coolant);
+                net += mdot;
+            }
+            net
+        };
+        let mut out = NortonSource {
+            mass_flow: vec![0.0; n],
+            mean_mass_flow: 0.0,
+            mean_t0: 0.0,
+            mean_power: 0.0,
+            coeffs: vec![[0.0; 4]; nm],
+            pb,
+        };
+        let mut energy = 0.0;
+        let mut t = 0.0;
+        for c in 0..cycles {
+            let last = c + 1 == cycles;
+            for s in 0..n {
+                if last {
+                    let man = manifolds(&st);
+                    for (j, m) in self.manifolds.iter().enumerate() {
+                        let (pm, tm) = man[j];
+                        let m_man = st.ode[ncyl + 2 * j];
+                        let (mdot, _, h0, power) =
+                            self.nozzle_flow(gas, j, pm, tm, m_man, pb, back, dt);
+                        out.mass_flow[s] += mdot;
+                        out.mean_power += power / n as f64;
+                        energy += mdot * h0;
+                        // Physical conductances for the admittance: no overshoot limit.
+                        let eps = 1e-4 * pm;
+                        let flow = |pm: f64, pb: f64| {
+                            self.nozzle_flow(gas, j, pm, tm, m_man, pb, back, 0.0).0
+                        };
+                        let a = (flow(pm + eps, pb) - flow(pm - eps, pb)) / (2.0 * eps);
+                        let b = (flow(pm, pb - eps) - flow(pm, pb + eps)) / (2.0 * eps);
+                        let mut g = 0.0;
+                        for &k in &m.cylinders {
+                            if st.cyl_phase[k] == CylPhase::Open {
+                                let q = |pm: f64| {
+                                    self.valve_flow(gas, k, t, st.ode[k], pm, tm, m_man, 0.0).0
+                                };
+                                g += (q(pm - eps) - q(pm + eps)) / (2.0 * eps);
+                            }
+                        }
+                        let comp = m.volume / (gas.gamma(tm) * gas.r() * tm);
+                        for (acc, v) in out.coeffs[j].iter_mut().zip([a, b, g, comp]) {
+                            *acc += v / n as f64;
+                        }
+                    }
+                }
+                for _ in 0..sub {
+                    let y0 = st.ode.clone();
+                    deriv(&mut st, t);
+                    let k1 = st.deriv.clone();
+                    for (y, k) in st.ode.iter_mut().zip(&k1) {
+                        *y += dt * k;
+                    }
+                    deriv(&mut st, t + dt);
+                    for ((y, y0), (k1, k2)) in
+                        st.ode.iter_mut().zip(&y0).zip(k1.iter().zip(&st.deriv))
+                    {
+                        *y = y0 + 0.5 * dt * (k1 + k2);
+                    }
+                    t += dt;
+                    self.update_phases(t, gas, &mut st);
+                }
+            }
+        }
+        out.mean_mass_flow = out.mass_flow.iter().sum::<f64>() / n as f64;
+        if out.mean_mass_flow.is_nan() || out.mean_mass_flow <= 0.0 {
+            return Err(Error::solver(
+                "engine source: no net outflow into the fixed back pressure",
+            ));
+        }
+        out.mean_t0 = gas.t_from_h(energy / (out.mean_mass_flow * n as f64));
+        Ok(out)
+    }
+
+    pub(crate) fn eval(
+        &self,
+        gas: &Gas,
+        t: f64,
+        dt: f64,
+        ps: &PortState,
+        st: &mut NodeState,
+    ) -> Result<()> {
+        let n = self.geometry.cylinders();
+        let r = gas.r();
+        let man: Vec<(f64, f64)> = (0..self.manifolds.len())
+            .map(|j| self.manifold_state(gas, &st.ode, j))
+            .collect();
+        let m_man: Vec<f64> = (0..self.manifolds.len())
+            .map(|j| st.ode[n + 2 * j])
+            .collect();
+        self.valve_derivatives(gas, t, dt, st, &man);
 
         // Turbine nozzles → downpipe face. Unknown: face pressure p_b.
         let a_port = ps.area;
-        let eta = self.extraction;
         let flows = |pb: f64| {
             let v_b = ps.v - wave_f(pb, ps.rho, ps.p, ps.c, ps.gamma).0;
             let rho_w = wave_rho(pb, ps.rho, ps.p, ps.gamma);
@@ -696,27 +911,19 @@ impl SourceBc {
                 h0_f,
                 ..Default::default()
             };
-            for (j, m) in self.manifolds.iter().enumerate() {
+            for j in 0..self.manifolds.len() {
                 let (pm, tm) = man[j];
-                if pm >= pb {
-                    let g = gas.gamma(tm);
-                    let mdot = m.turbine_area * nozzle_mass_flux(pm, tm, pb, g, r);
-                    let hm = gas.h(tm);
-                    let h0 = hm - eta * (hm - gas.h(tm * (pb / pm).powf((g - 1.0) / g)));
-                    out.mdot[j] = mdot;
-                    out.h_man[j] = hm;
+                let (mdot, hm, h0, power) =
+                    self.nozzle_flow(gas, j, pm, tm, m_man[j], pb, (p0_f, t0_f, h0_f), dt);
+                out.mdot[j] = mdot;
+                out.h_man[j] = hm;
+                if mdot > 0.0 {
                     out.fwd_mass += mdot;
                     out.fwd_energy += mdot * h0;
-                    out.power += mdot * (hm - h0);
-                    out.energy += mdot * h0;
-                } else {
-                    let mdot =
-                        -m.turbine_area * nozzle_mass_flux(p0_f, t0_f, pm, gas.gamma(t0_f), r);
-                    out.mdot[j] = mdot;
-                    out.h_man[j] = h0_f;
-                    out.energy += mdot * h0_f;
                 }
-                out.net += out.mdot[j];
+                out.power += power;
+                out.energy += mdot * h0;
+                out.net += mdot;
             }
             out.rho_b = if v_b < 0.0 && out.fwd_mass > 0.0 {
                 let h0_in = out.fwd_energy / out.fwd_mass;
@@ -738,9 +945,9 @@ impl SourceBc {
             ))
         })?;
         let f = flows(pb);
-        for j in 0..self.manifolds.len() {
+        for (j, m) in self.manifolds.iter().enumerate() {
             st.deriv[n + 2 * j] -= f.mdot[j];
-            st.deriv[n + 2 * j + 1] -= f.mdot[j] * f.h_man[j];
+            st.deriv[n + 2 * j + 1] -= f.mdot[j] * f.h_man[j] + m.ua * (man[j].1 - m.t_coolant);
         }
         st.turbine_power = f.power;
         let h0 = if f.net.abs() > 0.0 {
@@ -756,6 +963,50 @@ impl SourceBc {
             rho: f.rho_b,
         };
         Ok(())
+    }
+}
+
+/// Norton equivalent of the engine source (see [`SourceBc::norton`]).
+#[derive(Clone, Debug)]
+pub struct NortonSource {
+    /// Short-circuit mass flow into the downpipe over one cycle, kg/s.
+    pub mass_flow: Vec<f64>,
+    pub mean_mass_flow: f64,
+    /// Mass-weighted stagnation temperature delivered, K.
+    pub mean_t0: f64,
+    /// Mean turbine power, W.
+    pub mean_power: f64,
+    /// Per scroll, cycle averages of `(∂ṁ/∂p_M, −∂ṁ/∂p_b, valve conductance −∂ṁ_v/∂p_M,
+    /// manifold compliance V/(γRT))`.
+    pub coeffs: Vec<[f64; 4]>,
+    /// Face pressure of the run, Pa.
+    pub pb: f64,
+}
+
+impl NortonSource {
+    /// Source admittance `Y(ω)` (mass flow into the duct = `Q − Y p`):
+    /// `δṁ = a δp_M − b δp_b` through each nozzle and `(jωC + g) δp_M = −δṁ` in each manifold
+    /// give `Y = Σ b / (1 + a/(jωC + g))`.
+    pub fn admittance(&self, omega: f64) -> rustfft::num_complex::Complex64 {
+        use rustfft::num_complex::Complex64 as C;
+        self.coeffs
+            .iter()
+            .map(|&[a, b, g, c]| C::new(b, 0.0) / (1.0 + a / C::new(g, omega * c)))
+            .sum()
+    }
+
+    /// Complex amplitude of harmonic `m` of the short-circuit mass flow (cycle frequency
+    /// multiples), kg/s, with `t = 0` at cylinder 1 firing TDC.
+    pub fn strength(&self, m: usize) -> rustfft::num_complex::Complex64 {
+        let n = self.mass_flow.len();
+        let mut s = rustfft::num_complex::Complex64::new(0.0, 0.0);
+        for (i, q) in self.mass_flow.iter().enumerate() {
+            s += q * rustfft::num_complex::Complex64::from_polar(
+                1.0,
+                -2.0 * std::f64::consts::PI * (m * i) as f64 / n as f64,
+            );
+        }
+        2.0 * s / n as f64
     }
 }
 

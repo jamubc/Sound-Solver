@@ -21,6 +21,7 @@
 
 pub mod nodes;
 pub mod scheme;
+pub mod stokes;
 pub mod wall;
 
 use crate::error::{Error, Result};
@@ -88,6 +89,23 @@ pub struct Duct {
     pub friction: bool,
     /// Minor-loss coefficient per cell, referred to the cell velocity.
     pub k_loss: Vec<f64>,
+    /// Laminar channel bundle (catalyst monolith) with this Poiseuille number `f·Re`: the
+    /// wall shear is `τ = ½ (f Re) μ u / D_h` at every Reynolds number.
+    pub channel: Option<f64>,
+    /// Outer wall seen by the thermal model; `None` loses no heat to ambient.
+    pub wall: Option<WallSpec>,
+}
+
+/// Pipe or shell wall between the gas and ambient air.
+#[derive(Clone, Copy, Debug, PartialEq)]
+pub struct WallSpec {
+    /// Outer diameter, m.
+    pub outer_diameter: f64,
+    pub thickness: f64,
+    /// W/(m K).
+    pub conductivity: f64,
+    /// Outer-surface emissivity.
+    pub emissivity: f64,
 }
 
 impl Duct {
@@ -157,6 +175,8 @@ impl Duct {
             roughness: 0.0,
             friction: false,
             k_loss: vec![0.0; n],
+            channel: None,
+            wall: None,
         }
     }
 
@@ -360,6 +380,12 @@ pub struct Simulation {
     /// Largest Courant number of any step taken.
     pub max_cfl: f64,
     pub steps: u64,
+    stokes: stokes::HalfDerivative,
+    /// Stokes-layer memory states per duct: for each cell, the velocity states then the
+    /// temperature states. Empty for ducts without wall friction and for channel bundles.
+    phi: Vec<Vec<f64>>,
+    /// Velocity and temperature of each cell at the start of the step.
+    start: Vec<Vec<(f64, f64)>>,
 }
 
 impl Simulation {
@@ -402,6 +428,19 @@ impl Simulation {
                 st
             })
             .collect();
+        let stokes = stokes::HalfDerivative::default();
+        let phi = net
+            .ducts
+            .iter()
+            .map(|d| {
+                if d.friction && d.channel.is_none() {
+                    vec![0.0; 2 * stokes.states() * d.n()]
+                } else {
+                    Vec::new()
+                }
+            })
+            .collect();
+        let start = net.ducts.iter().map(|d| vec![(0.0, 0.0); d.n()]).collect();
         Ok(Self {
             q_n: q.clone(),
             q,
@@ -413,6 +452,9 @@ impl Simulation {
             t: 0.0,
             max_cfl: 0.0,
             steps: 0,
+            stokes,
+            phi,
+            start,
         })
     }
 
@@ -472,6 +514,13 @@ impl Simulation {
         self.update_prims()?;
         self.max_cfl = self.max_cfl.max(dt * self.max_wave_rate());
         self.q_n.clone_from(&self.q);
+        for (d, start) in self.start.iter_mut().enumerate() {
+            if !self.phi[d].is_empty() {
+                for (s, p) in start.iter_mut().zip(&self.prim[d]) {
+                    *s = (p.u, p.t);
+                }
+            }
+        }
 
         // Stage 1: q¹ = qⁿ + Δt L(qⁿ).
         self.eval_nodes(t0, dt, Stage::One)?;
@@ -514,12 +563,40 @@ impl Simulation {
 
         self.t = t0 + dt;
         self.steps += 1;
+        self.stokes_layers(dt);
         for (st, node) in self.nodes.iter_mut().zip(&self.net.nodes) {
             if let Node::Source(src) = node {
                 src.update_phases(self.t, &self.net.gas, st);
             }
         }
         Ok(())
+    }
+
+    /// Stokes-layer wall shear and heat flux (`stokes`), applied after the step from the
+    /// change of each cell's velocity and temperature over it (first-order splitting; the
+    /// terms change the momentum by ~10⁻³ per step).
+    fn stokes_layers(&mut self, dt: f64) {
+        let (decay, gain) = self.stokes.step_factors(dt);
+        let np = self.stokes.states();
+        let gas = &self.net.gas;
+        for (d, duct) in self.net.ducts.iter().enumerate() {
+            if self.phi[d].is_empty() {
+                continue;
+            }
+            for i in 0..duct.n() {
+                let p = to_prim(gas, self.q[d][i]);
+                let (u0, t0) = self.start[d][i];
+                let (phi_u, phi_t) = self.phi[d][2 * np * i..2 * np * (i + 1)].split_at_mut(np);
+                let du = self.stokes.advance(phi_u, p.u - u0, &decay, &gain);
+                let dtemp = self.stokes.advance(phi_t, p.t - t0, &decay, &gain);
+                let tau = (p.rho * gas.viscosity(p.t)).sqrt() * du;
+                let heat = -(p.rho * gas.cp(p.t) * gas.conductivity(p.t)).sqrt() * dtemp;
+                let per = 4.0 / duct.diameter[i];
+                let q = &mut self.q[d][i];
+                q[1] -= dt * per * tau;
+                q[2] += dt * per * heat;
+            }
+        }
     }
 
     fn update_prims(&mut self) -> Result<()> {
@@ -606,7 +683,7 @@ impl Simulation {
                     st.faces[0] = face;
                 }
                 Node::Junction(j) => j.eval(gas, ports, &mut st.faces)?,
-                Node::Source(src) => src.eval(gas, t, &ports[0], st)?,
+                Node::Source(src) => src.eval(gas, t, dt, &ports[0], st)?,
                 Node::Characteristic(bc) => {
                     st.faces[0] = nodes::characteristic(gas, &ports[0], bc, t)
                 }
@@ -689,8 +766,11 @@ impl Simulation {
                 let dia = duct.diameter[i];
                 if duct.friction {
                     let mu = gas.viscosity(p.t);
-                    r[1] -=
-                        wall::shear_stress(p.rho, p.u, mu, dia, duct.roughness) * 4.0 * vol / dia;
+                    let tau = match duct.channel {
+                        Some(fre) => 0.5 * fre * mu * p.u / dia,
+                        None => wall::shear_stress(p.rho, p.u, mu, dia, duct.roughness),
+                    };
+                    r[1] -= tau * 4.0 * vol / dia;
                 }
                 if duct.k_loss[i] != 0.0 {
                     r[1] -= duct.k_loss[i] * 0.5 * p.rho * p.u * p.u.abs() * vol / duct.dx;
