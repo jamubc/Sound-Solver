@@ -51,7 +51,7 @@ pub fn run() -> Result<Vec<Check>> {
             dx,
         )],
         nodes: vec![outlet(Port::start(0)), outlet(Port::end(0))],
-        limiter: Limiter::VanLeer,
+        limiter: Limiter::default(),
         cfl: 0.8,
     };
     let mut sim = Simulation::new(net, |_, x| {

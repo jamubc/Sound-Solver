@@ -2,6 +2,7 @@
 
 pub mod engine;
 pub mod error;
+pub mod fourpole;
 pub mod gas;
 pub mod gas1d;
 pub mod geometry;

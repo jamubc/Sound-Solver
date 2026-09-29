@@ -29,6 +29,10 @@ pub enum Node {
     Junction(JunctionBc),
     /// Engine cylinders → manifold volumes → turbine → this duct end.
     Source(Box<SourceBc>),
+    /// Non-reflecting end with an optional incident wave.
+    Characteristic(CharacteristicBc),
+    /// Prescribed mass flow into the duct.
+    MassFlow(MassFlowBc),
 }
 
 impl Node {
@@ -39,6 +43,8 @@ impl Node {
             Node::Radiation(bc) => slice::from_ref(&bc.port),
             Node::Junction(j) => &j.ports,
             Node::Source(s) => slice::from_ref(&s.port),
+            Node::Characteristic(bc) => slice::from_ref(&bc.port),
+            Node::MassFlow(bc) => slice::from_ref(&bc.port),
         }
     }
 }
@@ -165,10 +171,15 @@ pub(crate) fn radiation(
 }
 
 /// Junction model.
-#[derive(Clone, Copy, Debug, PartialEq, Eq)]
+#[derive(Clone, Copy, Debug, PartialEq)]
 pub enum JunctionKind {
     /// Two collinear ducts of different area meeting at a step.
     AreaChange,
+    /// Two ducts joined through an orifice of effective area `C_d A_o` (m²): a throttle or a
+    /// butterfly valve.
+    Orifice { effective_area: f64 },
+    /// Any number of ducts sharing one static pressure (Benson's constant-pressure junction).
+    ConstantPressure,
 }
 
 /// Duct ends meeting at a point.
@@ -187,25 +198,47 @@ impl JunctionBc {
     ) -> Result<()> {
         match self.kind {
             JunctionKind::AreaChange => {
-                let (a, b) = area_change(gas, &ports[0], &ports[1]);
-                faces[0] = a;
-                faces[1] = b;
+                (faces[0], faces[1]) = step_junction(gas, &ports[0], &ports[1], None);
             }
+            JunctionKind::Orifice { effective_area } => {
+                (faces[0], faces[1]) =
+                    step_junction(gas, &ports[0], &ports[1], Some(effective_area));
+            }
+            JunctionKind::ConstantPressure => constant_pressure(gas, ports, faces),
         }
         Ok(())
     }
 }
 
-/// Sudden area change. With `v` toward the junction and `W = p + ρc v` the wave arriving from
-/// each side, the upstream velocity `v_u` solves
+/// Loss coefficient referred to the upstream velocity `v_u` for flow from area `a_u` to
+/// `a_d`, optionally through an orifice of effective area `a_e`.
+///
+/// Expansion: Borda–Carnot `(1 − A_u/A_d)²`, identical to the momentum balance with base
+/// pressure equal to the jet pressure. Contraction: `0.5 (1 − A_d/A_u)^0.75` on `v_d`
+/// (Idelchik 1986, sharp-edged, Re > 10⁴). Orifice: the jet leaves the vena contracta at
+/// `v_u A_u/A_e` and mixes out in the downstream pipe, `(A_u/A_e − A_u/A_d)²`.
+pub fn step_loss(a_u: f64, a_d: f64, a_e: Option<f64>) -> f64 {
+    let alpha = a_u / a_d;
+    match a_e {
+        Some(a_e) if a_e < a_u.min(a_d) => (a_u / a_e - alpha).powi(2),
+        _ if a_d >= a_u => (1.0 - alpha).powi(2),
+        _ => 0.5 * (1.0 - 1.0 / alpha).powf(0.75) * alpha * alpha,
+    }
+}
+
+/// Sudden area change or orifice between two ducts. With `v` toward the junction and
+/// `W = p + ρc v` the wave arriving from each side, the upstream velocity `v_u` solves
 /// ```text
-/// (W_u − Z_u v_u) + ½ρ v_u² − (W_d − Z_d v_d) − ½ρ v_d² = K ½ρ v_ref²,   v_d = −(A_u/A_d) v_u
+/// (W_u − Z_u v_u) + ½ρ v_u² − (W_d − Z_d v_d) − ½ρ v_d² = K ½ρ v_u²,   v_d = −(A_u/A_d) v_u
 /// ```
-/// (stagnation-pressure loss across the step). Expansion: Borda–Carnot `K = (1 − A_u/A_d)²`
-/// on `v_u`, identical to the momentum balance with base pressure equal to the jet pressure.
-/// Contraction: `K = 0.5 (1 − A_d/A_u)^0.75` on `v_d` (Idelchik 1986, sharp-edged, Re > 10⁴).
-/// Mass and stagnation enthalpy pass through unchanged, so both are conserved exactly.
-fn area_change(gas: &Gas, a: &PortState, b: &PortState) -> (FaceState, FaceState) {
+/// (stagnation-pressure loss across the step, [`step_loss`]). Mass and stagnation enthalpy
+/// pass through unchanged, so both are conserved exactly.
+fn step_junction(
+    gas: &Gas,
+    a: &PortState,
+    b: &PortState,
+    orifice: Option<f64>,
+) -> (FaceState, FaceState) {
     let wa = a.p + a.rho * a.c * a.v;
     let wb = b.p + b.rho * b.c * b.v;
     let flip = wb > wa;
@@ -213,11 +246,7 @@ fn area_change(gas: &Gas, a: &PortState, b: &PortState) -> (FaceState, FaceState
     let (wu, wd) = if flip { (wb, wa) } else { (wa, wb) };
     let (zu, zd) = (up.rho * up.c, dn.rho * dn.c);
     let alpha = up.area / dn.area;
-    let k_eff = if dn.area >= up.area {
-        (1.0 - alpha).powi(2)
-    } else {
-        0.5 * (1.0 - 1.0 / alpha).powf(0.75) * alpha * alpha
-    };
+    let k_eff = step_loss(up.area, dn.area, orifice);
     let c0 = wu - wd;
     let c1 = -(zu + alpha * zd);
     let c2 = 0.5 * up.rho * (1.0 - alpha * alpha - k_eff);
@@ -251,6 +280,198 @@ fn area_change(gas: &Gas, a: &PortState, b: &PortState) -> (FaceState, FaceState
         rho: rho_d,
     };
     if flip { (fd, fu) } else { (fu, fd) }
+}
+
+/// Constant-pressure junction (Benson 1982). With linear characteristics
+/// `vₖ = (Wₖ − p_J)/Zₖ` and `Σ ρₖ Aₖ vₖ = 0`, the common pressure is
+/// `p_J = Σ(Aₖ Wₖ/cₖ) / Σ(Aₖ/cₖ)`. Gas arriving from the ducts (`vₖ > 0`) mixes; the mixed
+/// stagnation enthalpy leaves through the other ports, and the arriving mass is shared between
+/// them in proportion to their volume flow, so mass and energy are conserved exactly.
+fn constant_pressure(gas: &Gas, ports: &[PortState], faces: &mut [FaceState]) {
+    let (num, den) = ports.iter().fold((0.0, 0.0), |(n, d), s| {
+        let w = s.p + s.rho * s.c * s.v;
+        (n + s.area * w / s.c, d + s.area / s.c)
+    });
+    let pj = num / den;
+    let (mut m_in, mut e_in, mut vol_out) = (0.0, 0.0, 0.0);
+    let mut v = [0.0; super::MAX_PORTS];
+    for (k, s) in ports.iter().enumerate() {
+        v[k] = (s.p + s.rho * s.c * s.v - pj) / (s.rho * s.c);
+        if v[k] > 0.0 {
+            let rho = s.rho * (pj / s.p).powf(1.0 / s.gamma);
+            let h0 = gas.h(pj / (rho * gas.r())) + 0.5 * v[k] * v[k];
+            let mdot = rho * s.area * v[k];
+            m_in += mdot;
+            e_in += mdot * h0;
+            faces[k] = FaceState {
+                mass_flux: rho * v[k],
+                p: pj,
+                v: v[k],
+                h0,
+                rho,
+            };
+        } else {
+            vol_out -= s.area * v[k];
+        }
+    }
+    let h0_mix = if m_in > 0.0 { e_in / m_in } else { 0.0 };
+    for (k, s) in ports.iter().enumerate() {
+        if v[k] > 0.0 {
+            continue;
+        }
+        if m_in == 0.0 || vol_out == 0.0 {
+            faces[k] = FaceState {
+                mass_flux: 0.0,
+                p: pj,
+                v: 0.0,
+                h0: 0.0,
+                rho: s.rho,
+            };
+            continue;
+        }
+        let mdot = m_in * s.area * (-v[k]) / vol_out;
+        let rho = pj / (gas.r() * gas.t_from_h(h0_mix - 0.5 * v[k] * v[k]));
+        faces[k] = FaceState {
+            mass_flux: -mdot / s.area,
+            p: pj,
+            v: -mdot / (rho * s.area),
+            h0: h0_mix,
+            rho,
+        };
+    }
+}
+
+/// A time signal driving a boundary.
+#[derive(Clone, Debug, PartialEq)]
+pub enum Signal {
+    Zero,
+    /// `a exp(−½((t − t₀)/σ)²)`.
+    Gaussian {
+        amplitude: f64,
+        t0: f64,
+        sigma: f64,
+    },
+    /// `mean + Σₖ aₖ cos(k ω t + φₖ)`, terms `(aₖ, φₖ)` for k = 1, 2, …
+    Harmonics {
+        mean: f64,
+        omega: f64,
+        terms: Vec<(f64, f64)>,
+    },
+}
+
+impl Signal {
+    pub fn at(&self, t: f64) -> f64 {
+        match self {
+            Signal::Zero => 0.0,
+            Signal::Gaussian {
+                amplitude,
+                t0,
+                sigma,
+            } => amplitude * (-0.5 * ((t - t0) / sigma).powi(2)).exp(),
+            Signal::Harmonics { mean, omega, terms } => {
+                mean + terms
+                    .iter()
+                    .enumerate()
+                    .map(|(k, (a, phi))| a * ((k + 1) as f64 * omega * t + phi).cos())
+                    .sum::<f64>()
+            }
+        }
+    }
+}
+
+/// Characteristic (non-reflecting) end: the wave leaving the duct passes out unreflected and
+/// the wave entering it is `incoming(t)`, both as linear characteristics about `(p_ref, t_ref)`:
+/// `p = p_ref + (W_out + W_in)/2`, `v = (W_out − W_in)/(2ρc)`. An anechoic termination with
+/// `Signal::Zero`; an incident-wave source otherwise.
+#[derive(Clone, Debug)]
+pub struct CharacteristicBc {
+    pub port: Port,
+    pub p_ref: f64,
+    pub t_ref: f64,
+    pub incoming: Signal,
+}
+
+pub(crate) fn characteristic(
+    gas: &Gas,
+    ps: &PortState,
+    bc: &CharacteristicBc,
+    t: f64,
+) -> FaceState {
+    let z = ps.rho * ps.c;
+    let w_out = (ps.p - bc.p_ref) + z * ps.v;
+    let w_in = bc.incoming.at(t);
+    let p = bc.p_ref + 0.5 * (w_out + w_in);
+    let v = (w_out - w_in) / (2.0 * z);
+    if v >= 0.0 {
+        let rho = ps.rho * (p / ps.p).powf(1.0 / ps.gamma);
+        let tf = p / (rho * gas.r());
+        FaceState {
+            mass_flux: rho * v,
+            p,
+            v,
+            h0: gas.h(tf) + 0.5 * v * v,
+            rho,
+        }
+    } else {
+        let h0 = gas.h(bc.t_ref);
+        let rho = p / (gas.r() * gas.t_from_h(h0 - 0.5 * v * v));
+        FaceState {
+            mass_flux: rho * v,
+            p,
+            v,
+            h0,
+            rho,
+        }
+    }
+}
+
+/// Prescribed mass flow into the duct (a rigid, infinite-impedance source) at stagnation
+/// temperature `t0`. The face pressure solves `ρ_face v_face A = −ṁ(t)` with `v_face` on the
+/// interior wave curve.
+#[derive(Clone, Debug)]
+pub struct MassFlowBc {
+    pub port: Port,
+    /// Mass flow into the duct, kg/s.
+    pub mdot: Signal,
+    pub t0: f64,
+}
+
+pub(crate) fn mass_flow(gas: &Gas, ps: &PortState, bc: &MassFlowBc, t: f64) -> Result<FaceState> {
+    let mdot = bc.mdot.at(t);
+    let h00 = gas.h(bc.t0);
+    let face = |pb: f64| {
+        let v = ps.v - wave_f(pb, ps.rho, ps.p, ps.c, ps.gamma).0;
+        let rho = if mdot > 0.0 {
+            pb / (gas.r() * gas.t_from_h(h00 - 0.5 * v * v))
+        } else {
+            wave_rho(pb, ps.rho, ps.p, ps.gamma)
+        };
+        (v, rho)
+    };
+    let pb = brent(
+        |pb| {
+            let (v, rho) = face(pb);
+            rho * v * ps.area + mdot
+        },
+        0.05 * ps.p,
+        20.0 * ps.p,
+        1e-10 * ps.p,
+        200,
+    )
+    .ok_or_else(|| Error::solver("mass-flow boundary: no face pressure found"))?;
+    let (v, rho) = face(pb);
+    let h0 = if mdot > 0.0 {
+        h00
+    } else {
+        gas.h(pb / (rho * gas.r())) + 0.5 * v * v
+    };
+    Ok(FaceState {
+        mass_flux: -mdot / ps.area,
+        p: pb,
+        v,
+        h0,
+        rho,
+    })
 }
 
 /// Phase of a cylinder's exhaust event.

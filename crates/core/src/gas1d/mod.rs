@@ -25,7 +25,16 @@ pub mod wall;
 
 use crate::error::{Error, Result};
 use crate::gas::Gas;
-pub use nodes::{CylPhase, JunctionBc, Manifold, Node, RadiationBc, SourceBc};
+pub use nodes::{
+    CharacteristicBc, CylPhase, JunctionBc, JunctionKind, Manifold, MassFlowBc, Node, RadiationBc,
+    Signal, SourceBc,
+};
+
+/// Most duct ends one node may join.
+pub const MAX_PORTS: usize = 8;
+
+/// TVB bound of `Limiter::VanLeerTvb`, as a fraction of the cell's ρ, c and p.
+pub const TVB_BOUND: f64 = 1e-3;
 pub use scheme::Limiter;
 use scheme::{State, hllc};
 
@@ -216,6 +225,11 @@ impl Network {
         }
         let mut count = vec![[0usize; 2]; self.ducts.len()];
         for node in &self.nodes {
+            if node.ports().len() > MAX_PORTS {
+                return Err(Error::invalid(format!(
+                    "a node joins more than {MAX_PORTS} ducts"
+                )));
+            }
             for p in node.ports() {
                 if p.duct >= self.ducts.len() {
                     return Err(Error::invalid(format!(
@@ -289,7 +303,7 @@ impl FaceState {
 }
 
 /// Interior state next to a port, with `v` the velocity toward the node.
-#[derive(Clone, Copy, Debug)]
+#[derive(Clone, Copy, Debug, Default)]
 pub struct PortState {
     pub rho: f64,
     pub v: f64,
@@ -341,7 +355,7 @@ pub struct Simulation {
     q_n: Vec<Vec<[f64; 3]>>,
     prim: Vec<Vec<Prim>>,
     rhs: Vec<Vec<[f64; 3]>>,
-    slope: Vec<[f64; 3]>,
+    slope: Vec<[[f64; 3]; 2]>,
     pub nodes: Vec<NodeState>,
     /// Largest Courant number of any step taken.
     pub max_cfl: f64,
@@ -393,7 +407,7 @@ impl Simulation {
             q,
             prim,
             rhs,
-            slope: vec![[0.0; 3]; max_n],
+            slope: vec![[[0.0; 3]; 2]; max_n],
             nodes,
             net,
             t: 0.0,
@@ -545,11 +559,12 @@ impl Simulation {
 
     fn eval_nodes(&mut self, t: f64, dt: f64, stage: Stage) -> Result<()> {
         for i in 0..self.net.nodes.len() {
-            let ports: Vec<PortState> = self.net.nodes[i]
-                .ports()
-                .iter()
-                .map(|&p| self.port_state(p))
-                .collect();
+            let mut buf = [PortState::default(); MAX_PORTS];
+            let node_ports = self.net.nodes[i].ports();
+            for (k, &p) in node_ports.iter().enumerate() {
+                buf[k] = self.port_state(p);
+            }
+            let ports = &buf[..node_ports.len()];
             let gas = &self.net.gas;
             let st = &mut self.nodes[i];
             match &self.net.nodes[i] {
@@ -590,8 +605,12 @@ impl Simulation {
                     };
                     st.faces[0] = face;
                 }
-                Node::Junction(j) => j.eval(gas, &ports, &mut st.faces)?,
+                Node::Junction(j) => j.eval(gas, ports, &mut st.faces)?,
                 Node::Source(src) => src.eval(gas, t, &ports[0], st)?,
+                Node::Characteristic(bc) => {
+                    st.faces[0] = nodes::characteristic(gas, &ports[0], bc, t)
+                }
+                Node::MassFlow(bc) => st.faces[0] = nodes::mass_flow(gas, &ports[0], bc, t)?,
             }
         }
         Ok(())
@@ -622,26 +641,26 @@ impl Simulation {
         for (d, duct) in self.net.ducts.iter().enumerate() {
             let prim = &self.prim[d];
             let n = duct.n();
-            let slope = &mut self.slope[..n];
-            slope[0] = [0.0; 3];
-            slope[n - 1] = [0.0; 3];
+            // off[i] = (left-face, right-face) offsets of (ρ, u, p) from the cell average.
+            let off = &mut self.slope[..n];
+            off[0] = [[0.0; 3]; 2];
+            off[n - 1] = [[0.0; 3]; 2];
             for i in 1..n - 1 {
                 let (a, b, c) = (&prim[i - 1], &prim[i], &prim[i + 1]);
-                slope[i] = [
-                    limiter.slope(b.rho - a.rho, c.rho - b.rho),
-                    limiter.slope(b.u - a.u, c.u - b.u),
-                    limiter.slope(b.p - a.p, c.p - b.p),
-                ];
+                let r = limiter.offsets(b.rho - a.rho, c.rho - b.rho, TVB_BOUND * b.rho);
+                let u = limiter.offsets(b.u - a.u, c.u - b.u, TVB_BOUND * b.c);
+                let p = limiter.offsets(b.p - a.p, c.p - b.p, TVB_BOUND * b.p);
+                off[i] = [[r.0, u.0, p.0], [r.1, u.1, p.1]];
             }
             let face_state = |i: usize, sign: f64| -> State {
-                let s = slope[i];
+                let s = off[i][(sign > 0.0) as usize];
                 if s == [0.0; 3] {
                     return prim[i].state();
                 }
                 let (rho, u, p) = (
-                    prim[i].rho + sign * 0.5 * s[0],
-                    prim[i].u + sign * 0.5 * s[1],
-                    prim[i].p + sign * 0.5 * s[2],
+                    prim[i].rho + sign * s[0],
+                    prim[i].u + sign * s[1],
+                    prim[i].p + sign * s[2],
                 );
                 if rho > 0.0 && p > 0.0 {
                     State::from_primitive(gas, rho, u, p)

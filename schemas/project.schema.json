@@ -411,6 +411,11 @@
           "description": "van Leer (1974): `2ab/(a + b)` when `ab > 0`.",
           "type": "string",
           "const": "van_leer"
+        },
+        {
+          "description": "van Leer with a TVB bound (Shu 1987): where both one-sided differences are below\n`gas1d::TVB_BOUND` of the local ρ, c or p the profile is treated as smooth and\nreconstructed unlimited with the third-order upwind-biased MUSCL κ = 1/3 formula;\nelsewhere (engine pulses, shocks, contact jumps) the van Leer limiter applies. Strict\nTVD limiters flatten every acoustic extremum; over 2 m of pipe at Δx = 15 mm and 19 cells\nper wavelength van Leer loses 10 dB at 1.2 kHz, this variant 2 dB (0.2 dB in exhaust gas).",
+          "type": "string",
+          "const": "van_leer_tvb"
         }
       ]
     },

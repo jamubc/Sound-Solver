@@ -38,7 +38,7 @@ pub fn run() -> Result<Vec<Check>> {
                 radius,
             }),
         ],
-        limiter: Limiter::VanLeer,
+        limiter: Limiter::default(),
         cfl: 0.8,
     };
     let (x0, sigma, amp) = (1.5, 0.01, 1.0);

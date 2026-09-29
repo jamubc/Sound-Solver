@@ -92,7 +92,7 @@
   "solver": {
     "dx_mm": 15.0,
     "cfl": 0.8,
-    "limiter": "van_leer",
+    "limiter": "van_leer_tvb",
     "min_cycles": 8,
     "max_cycles": 16,
     "periodicity_tolerance": 0.01,

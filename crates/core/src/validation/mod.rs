@@ -2,6 +2,7 @@
 //! reference and a pass limit from the build directive; `exhaustctl validate` runs them all and
 //! CI blocks on any failure.
 
+pub mod acoustic;
 pub mod duct;
 pub mod grid;
 pub mod outlet;
@@ -45,5 +46,11 @@ pub fn cases() -> Vec<Case> {
         ("duct", duct::run),
         ("grid", grid::run),
         ("determinism", grid::run_determinism),
+        ("open-pipe-fourpole", acoustic::open_pipe_fourpole),
+        ("area-change", acoustic::area_change),
+        ("chamber", acoustic::expansion_chamber),
+        ("stub", acoustic::quarter_wave_stub),
+        ("helmholtz", acoustic::helmholtz),
+        ("tee", acoustic::tee_junction),
     ]
 }

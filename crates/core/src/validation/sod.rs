@@ -81,7 +81,7 @@ pub fn run() -> Result<Vec<Check>> {
         gas,
         ducts: vec![duct],
         nodes: vec![Node::Wall(Port::start(0)), Node::Wall(Port::end(0))],
-        limiter: Limiter::VanLeer,
+        limiter: Limiter::default(),
         cfl: 0.8,
     };
     let mut sim = Simulation::new(net, |_, x| if x < 0.5 { LEFT } else { RIGHT })?;
