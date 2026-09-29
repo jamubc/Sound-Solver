@@ -2,9 +2,11 @@
 //! its JSON (the project schema) and passes it whole to every command, so the core is the only
 //! place a number comes from.
 //!
-//! Time-domain sweeps run point by point on Rayon, each point sent to the frontend as it
-//! finishes and cached on disk under the project's BLAKE3 hash, so an unchanged project never
-//! solves twice. A newer sweep supersedes an older one: points not yet started are dropped.
+//! Time-domain points and renders run as jobs (`exhaust_jobs`) on this machine, cached on disk
+//! under their job keys (the project's solved content, the job's parameters and the solver
+//! build), so an unchanged project never solves twice and a changed solver never reuses an old
+//! result. Sweeps run point by point on Rayon, each point sent to the frontend as it finishes;
+//! a newer sweep supersedes an older one: points not yet started are dropped.
 
 use std::path::{Path, PathBuf};
 use std::sync::atomic::{AtomicU64, Ordering};
@@ -21,6 +23,7 @@ use exhaust_core::scan::{self, Clearance, Mesh};
 use exhaust_core::solve::{self, CycleProgress, Line, PointOutcome, SolverKind, SweepResult};
 use exhaust_core::tune::{self, Tuning};
 use exhaust_core::{edit, metrics};
+use exhaust_jobs::{Job, Output, Progress, Runner};
 use rayon::prelude::*;
 use serde_json::Value;
 use tauri::ipc::{Channel, Response};
@@ -55,6 +58,17 @@ fn dir(path: &Path) -> &Path {
 fn read_mesh(file: &Path) -> Result<Mesh, String> {
     let bytes = std::fs::read(file).map_err(|e| format!("{}: {e}", file.display()))?;
     Mesh::parse(&file.to_string_lossy(), &bytes).map_err(|e| format!("{}: {e}", file.display()))
+}
+
+/// Jobs on this machine, cached in the app's cache directory.
+fn runner(app: &AppHandle) -> Result<Runner, String> {
+    let dir = app
+        .path()
+        .app_cache_dir()
+        .map_err(|e| e.to_string())?
+        .join("jobs");
+    std::fs::create_dir_all(&dir).map_err(|e| e.to_string())?;
+    Ok(Runner::local(dir))
 }
 
 /// Runs CPU-heavy work off the main thread.
@@ -331,27 +345,37 @@ async fn listen(
 /// each channel's pressure (f32, Pa), little-endian. A newer render or `cancel_render` stops it.
 #[tauri::command]
 async fn render(
+    app: AppHandle,
     project: Value,
     scene: Scene,
     on_progress: Channel<RenderProgress>,
 ) -> Result<Response, String> {
     let project = parse(&project)?;
+    let runner = runner(&app)?;
     let generation = RENDER.fetch_add(1, Ordering::SeqCst) + 1;
     blocking(move || {
-        let r = exhaust_core::render::render(&project, &scene, &mut |p| {
-            let _ = on_progress.send(p);
+        let job = Job::Render {
+            project: Box::new(project),
+            scene,
+        };
+        let out = runner.run(&job, &mut |p| {
+            if let Progress::Render(p) = p {
+                let _ = on_progress.send(p);
+            }
             RENDER.load(Ordering::SeqCst) == generation
-        })
-        .map_err(|e| e.to_string())?;
-        let mut info = serde_json::to_vec(&r.info).map_err(|e| e.to_string())?;
+        })?;
+        let Output::Render { info, channels } = out else {
+            return Err("a render job made no render".into());
+        };
+        let mut info = serde_json::to_vec(&info).map_err(|e| e.to_string())?;
         info.resize(info.len().next_multiple_of(4), b' ');
-        let n = r.channels.first().map_or(0, Vec::len);
-        let mut out = Vec::with_capacity(12 + info.len() + 4 * n * r.channels.len());
+        let n = channels.first().map_or(0, Vec::len);
+        let mut out = Vec::with_capacity(12 + info.len() + 4 * n * channels.len());
         out.extend((info.len() as u32).to_le_bytes());
         out.extend(&info);
-        out.extend((r.channels.len() as u32).to_le_bytes());
+        out.extend((channels.len() as u32).to_le_bytes());
         out.extend((n as u32).to_le_bytes());
-        for s in r.channels.iter().flatten() {
+        for s in channels.iter().flatten() {
             out.extend(s.to_le_bytes());
         }
         Ok(Response::new(out))
@@ -432,13 +456,8 @@ async fn solve(
     on_cycle: Channel<CycleProgress>,
 ) -> Result<SweepResult, String> {
     let project = parse(&project)?;
+    let runner = runner(&app)?;
     let generation = GENERATION.fetch_add(1, Ordering::SeqCst) + 1;
-    let cache = app
-        .path()
-        .app_cache_dir()
-        .map_err(|e| e.to_string())?
-        .join("time-domain");
-    std::fs::create_dir_all(&cache).map_err(|e| e.to_string())?;
     tauri::async_runtime::spawn_blocking(move || {
         let hash = project.hash();
         let rpms = project.operating.sweep();
@@ -449,33 +468,25 @@ async fn solve(
                 if !current() {
                     return None;
                 }
-                let file = cache.join(format!("{hash}-{rpm}.json"));
-                let cached = std::fs::read_to_string(&file)
-                    .ok()
-                    .and_then(|text| serde_json::from_str(&text).ok());
-                let outcome = match cached {
-                    Some(outcome) => outcome,
-                    None => {
-                        let run = solve::solve_point_with(&project, rpm, &mut |progress| {
-                            let _ = on_cycle.send(progress);
-                            current()
-                        });
-                        // Stopped by a newer sweep: neither cached nor reported.
-                        if run.is_err() && !current() {
-                            return None;
-                        }
-                        let outcome = match run {
-                            Ok(r) => PointOutcome::Solved(Box::new(r)),
-                            Err(e) => PointOutcome::Failed {
-                                rpm,
-                                error: e.to_string(),
-                            },
-                        };
-                        if let Ok(json) = serde_json::to_string(&outcome) {
-                            let _ = std::fs::write(&file, json);
-                        }
-                        outcome
+                let job = Job::Point {
+                    project: Box::new(project.clone()),
+                    rpm,
+                };
+                let run = runner.run(&job, &mut |p| {
+                    if let Progress::Cycle(c) = p {
+                        let _ = on_cycle.send(c);
                     }
+                    current()
+                });
+                let outcome = match run {
+                    Ok(Output::Point(outcome)) => outcome,
+                    // Stopped by a newer sweep: neither cached nor reported.
+                    Err(_) if !current() => return None,
+                    Err(error) => PointOutcome::Failed { rpm, error },
+                    Ok(_) => PointOutcome::Failed {
+                        rpm,
+                        error: "a point job made no point".into(),
+                    },
                 };
                 let _ = on_point.send(outcome.clone());
                 Some(outcome)

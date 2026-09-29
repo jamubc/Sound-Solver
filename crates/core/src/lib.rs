@@ -30,3 +30,7 @@ pub mod tune;
 pub mod validation;
 
 pub use error::{Error, Result};
+
+/// Hash of this build's solver source (`build.rs`): a result made by another build of the
+/// solver is never taken for this one's.
+pub const SOURCE: &str = env!("EXHAUST_CORE_SOURCE");

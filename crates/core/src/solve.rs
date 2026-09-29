@@ -136,7 +136,7 @@ pub struct PointResult {
 }
 
 /// A point either solved or failed; failures carry the reason and no numbers.
-#[derive(Clone, Debug, Serialize, Deserialize, JsonSchema)]
+#[derive(Clone, Debug, PartialEq, Serialize, Deserialize, JsonSchema)]
 #[serde(tag = "status", rename_all = "snake_case")]
 pub enum PointOutcome {
     Solved(Box<PointResult>),

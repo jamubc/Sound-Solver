@@ -20,6 +20,9 @@ toml = "1.1.6"
 truck-modeling = "0.6"
 truck-stepio = { version = "0.3", default-features = false }
 
+[build-dependencies]
+blake3 = "1.8.7"
+
 [dev-dependencies]
 # Reads exported STEP back in the tests.
 ruststep = "0.4"

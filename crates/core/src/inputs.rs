@@ -267,7 +267,7 @@ pub fn value_at(project: &serde_json::Value, path: &str) -> Option<serde_json::V
 }
 
 /// A recorded input as a result reports it.
-#[derive(Clone, Debug, PartialEq, Serialize, JsonSchema)]
+#[derive(Clone, Debug, PartialEq, Serialize, Deserialize, JsonSchema)]
 pub struct InputUse {
     pub path: String,
     /// The value in use.

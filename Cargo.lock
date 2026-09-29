@@ -991,6 +991,7 @@ name = "exhaust-app"
 version = "0.1.0"
 dependencies = [
  "exhaust-core",
+ "exhaust-jobs",
  "rayon",
  "serde_json",
  "tauri",
@@ -1016,6 +1017,16 @@ dependencies = [
  "toml 1.1.6+spec-1.1.0",
  "truck-modeling",
  "truck-stepio",
+]
+
+[[package]]
+name = "exhaust-jobs"
+version = "0.1.0"
+dependencies = [
+ "blake3",
+ "exhaust-core",
+ "serde",
+ "serde_json",
 ]
 
 [[package]]

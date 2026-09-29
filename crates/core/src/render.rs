@@ -106,7 +106,7 @@ pub struct Render {
     pub info: RenderInfo,
 }
 
-#[derive(Clone, Debug, PartialEq, Serialize, JsonSchema)]
+#[derive(Clone, Debug, PartialEq, Serialize, Deserialize, JsonSchema)]
 pub struct RenderInfo {
     pub core_version: String,
     pub project_hash: String,
@@ -144,7 +144,7 @@ pub struct RenderInfo {
     pub warnings: Vec<String>,
 }
 
-#[derive(Clone, Debug, PartialEq, Serialize, JsonSchema)]
+#[derive(Clone, Debug, PartialEq, Serialize, Deserialize, JsonSchema)]
 pub struct StartState {
     pub rpm: f64,
     pub map_kpa: f64,
@@ -153,7 +153,7 @@ pub struct StartState {
     pub converged: bool,
 }
 
-#[derive(Clone, Debug, PartialEq, Serialize, JsonSchema)]
+#[derive(Clone, Debug, PartialEq, Serialize, Deserialize, JsonSchema)]
 pub struct Refinement {
     pub rpm: f64,
     pub map_kpa: f64,
@@ -162,7 +162,7 @@ pub struct Refinement {
 }
 
 /// One ⅓-octave band (IEC 61260 base-ten centres) and whether the model resolves it.
-#[derive(Clone, Debug, PartialEq, Serialize, JsonSchema)]
+#[derive(Clone, Debug, PartialEq, Serialize, Deserialize, JsonSchema)]
 pub struct Band {
     pub center_hz: f64,
     pub lower_hz: f64,
