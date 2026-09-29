@@ -19,6 +19,7 @@ export async function mockBackend(page: Page, project: 'project' | 'project-stub
     tracks: fixture('tracks'),
     cabinTf: fixture('cabin-tf'),
     compare: fixture('compare'),
+    render: fixture('render') as { render: unknown },
   };
   await page.addInitScript((a) => {
     const callbacks = new Map<number, (message: unknown) => void>();
@@ -64,6 +65,26 @@ export async function mockBackend(page: Page, project: 'project' | 'project-stub
         new Float32Array(bytes, 20, n).set(Array.from({ length: n }, (_, i) => Math.sin((2 * Math.PI * 70 * i) / 22050)));
         return bytes;
       },
+      // The render's provenance, then half a second of a 100 Hz tone at 1 Pa peak.
+      render: (args) => {
+        const progress = callbacks.get((args.onProgress as { id: number }).id)!;
+        progress({ index: 0, message: { stage: 'settle', cycle: 1, residual: null } });
+        progress({ index: 1, message: { stage: 'march', fraction: 0.5 } });
+        progress({ index: 2, end: true });
+        const utf8 = new TextEncoder().encode(JSON.stringify(a.render.render));
+        const info = new Uint8Array(Math.ceil(utf8.length / 4) * 4).fill(32);
+        info.set(utf8);
+        const n = 24000;
+        const bytes = new ArrayBuffer(12 + info.length + 4 * n);
+        const view = new DataView(bytes);
+        view.setUint32(0, info.length, true);
+        new Uint8Array(bytes, 4, info.length).set(info);
+        view.setUint32(4 + info.length, 1, true);
+        view.setUint32(8 + info.length, n, true);
+        new Float32Array(bytes, 12 + info.length, n).set(Array.from({ length: n }, (_, i) => Math.sin((2 * Math.PI * 100 * i) / 48000)));
+        return bytes;
+      },
+      cancel_render: () => null,
       // A flat underbody 200 mm above the flange, in metres: 4 vertices, 2 triangles.
       scan_mesh: () => {
         const v = [-4, -1, 0.2, 1, -1, 0.2, 1, 1, 0.2, -4, 1, 0.2];

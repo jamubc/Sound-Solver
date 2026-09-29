@@ -2,6 +2,8 @@
 // from exhaustctl. Run from app/.
 import { execFileSync } from 'node:child_process';
 import { copyFileSync, mkdirSync, readFileSync, writeFileSync } from 'node:fs';
+import { tmpdir } from 'node:os';
+import { join } from 'node:path';
 
 const project = 'tests/cases/w205_stock.json';
 const out = (name) => `app/tests/fixtures/${name}.json`;
@@ -26,6 +28,9 @@ cli('export', 'fabrication', project, '-o', out('fabrication'));
 cli('export', 'manifests', '-o', out('manifests'));
 cli('solve', project, '--solver', 'four-pole', '-o', out('preview'));
 cli('solve', project, '--sweep', '2000:3000:500', '-o', out('solve'));
+// Half a second at 3000 rpm heard at the receiver: its provenance (the mock plays a tone).
+writeFileSync('tests/fixtures/scene.json', JSON.stringify({ duration_s: 0.5, rpm: [[0, 3000]], listener: { kind: 'receiver' } }));
+cli('render', project, '--scene', 'app/tests/fixtures/scene.json', '-o', join(tmpdir(), 'render.wav'), '--info', out('render'));
 
 // The reference project with a stub on the mid-pipe, to tune and to compare against.
 const stub = JSON.parse(readFileSync(`../${project}`, 'utf8'));

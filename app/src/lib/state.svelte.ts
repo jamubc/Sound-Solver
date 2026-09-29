@@ -40,6 +40,8 @@ export const REFERENCE_COLOURS = ['#4fd1c5', '#ff79c6', '#c792ea'];
 /** Results pinned to compare the configuration against. */
 export interface Baseline {
   name: string;
+  /** The project as pinned, for rendering it. */
+  project: Project;
   preview: SweepResult | null;
   timeDomain: SweepResult | null;
 }
@@ -249,6 +251,7 @@ export function pinBaseline() {
   if (!app.project) return;
   app.baseline = {
     name: app.project.name + (app.dirty ? ' (edited)' : ''),
+    project: $state.snapshot(app.project) as Project,
     preview: $state.snapshot(app.preview) as SweepResult | null,
     timeDomain: $state.snapshot(app.timeDomain.result) as SweepResult | null,
   };

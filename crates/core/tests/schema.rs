@@ -8,6 +8,7 @@ use exhaust_core::manifest::Manifest;
 use exhaust_core::measure::OrderTracks;
 use exhaust_core::metrics::OrderDifference;
 use exhaust_core::project::Project;
+use exhaust_core::render::{RenderInfo, RenderProgress, Scene};
 use exhaust_core::scan::Clearance;
 use exhaust_core::solve::{CycleProgress, PointOutcome, SweepResult};
 use exhaust_core::tune::Tuning;
@@ -28,6 +29,9 @@ struct Api {
     tuning: Tuning,
     tracks: OrderTracks,
     differences: Vec<OrderDifference>,
+    scene: Scene,
+    render: RenderInfo,
+    render_progress: RenderProgress,
 }
 
 fn check(file: &str, schema: Schema) {

@@ -68,6 +68,21 @@ test('the prediction is heard, steady or as a run-up', async ({ page }) => {
   await page.screenshot({ path: 'test-results/listen.png' });
 });
 
+test('a render is heard with every band labelled resolved or unresolved', async ({ page }) => {
+  await page.getByRole('tab', { name: 'Listen' }).click();
+  const listen = page.getByTestId('listen');
+  await listen.getByTestId('source-render').check();
+  await listen.getByTestId('play').click();
+  await expect(listen.getByTestId('level-current')).toContainText('time-domain render');
+  const bands = listen.getByTestId('bands');
+  await expect(bands.locator('span')).toHaveCount(34);
+  await expect(bands.locator('span.resolved').first()).toBeVisible();
+  await expect(listen).toContainText('cross-modes cut on');
+  await listen.getByTestId('play').click();
+  await expect(listen).toContainText('stopped');
+  await page.screenshot({ path: 'test-results/render.png' });
+});
+
 test('a pinned baseline is compared order by order and overlaid', async ({ page }) => {
   await page.getByRole('button', { name: 'Pin as baseline' }).click();
   await expect(page.getByTestId('differences').locator('tbody tr')).toHaveCount(8);

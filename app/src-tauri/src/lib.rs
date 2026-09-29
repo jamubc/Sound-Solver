@@ -16,6 +16,7 @@ use exhaust_core::manifest::{self, Manifest};
 use exhaust_core::measure::{self, OrderTracks, Recording, RpmLog};
 use exhaust_core::metrics::{Metrics, OrderDifference};
 use exhaust_core::project::{CabinTf, CabinTfMethod, Project};
+use exhaust_core::render::{RenderProgress, Scene};
 use exhaust_core::scan::{self, Clearance, Mesh};
 use exhaust_core::solve::{self, CycleProgress, Line, PointOutcome, SolverKind, SweepResult};
 use exhaust_core::tune::{self, Tuning};
@@ -30,6 +31,8 @@ const STOCK_W205: &str = include_str!("../../../tests/cases/w205_stock.json");
 
 /// Bumped by every sweep and by `cancel`; a sweep stops starting points once it is stale.
 static GENERATION: AtomicU64 = AtomicU64::new(0);
+/// Bumped by every render and by `cancel_render`; a render stops once it is stale.
+static RENDER: AtomicU64 = AtomicU64::new(0);
 
 fn parse(project: &Value) -> Result<Project, String> {
     Project::from_json(&project.to_string()).map_err(|e| e.to_string())
@@ -322,6 +325,46 @@ async fn listen(
     .await
 }
 
+/// Marches the project through `scene` (`render::render`), streaming its progress through
+/// `on_progress`: the render's provenance as JSON after its byte length (u32; padded with
+/// spaces to a multiple of 4), then the channel count and samples per channel (u32 each), then
+/// each channel's pressure (f32, Pa), little-endian. A newer render or `cancel_render` stops it.
+#[tauri::command]
+async fn render(
+    project: Value,
+    scene: Scene,
+    on_progress: Channel<RenderProgress>,
+) -> Result<Response, String> {
+    let project = parse(&project)?;
+    let generation = RENDER.fetch_add(1, Ordering::SeqCst) + 1;
+    blocking(move || {
+        let r = exhaust_core::render::render(&project, &scene, &mut |p| {
+            let _ = on_progress.send(p);
+            RENDER.load(Ordering::SeqCst) == generation
+        })
+        .map_err(|e| e.to_string())?;
+        let mut info = serde_json::to_vec(&r.info).map_err(|e| e.to_string())?;
+        info.resize(info.len().next_multiple_of(4), b' ');
+        let n = r.channels.first().map_or(0, Vec::len);
+        let mut out = Vec::with_capacity(12 + info.len() + 4 * n * r.channels.len());
+        out.extend((info.len() as u32).to_le_bytes());
+        out.extend(&info);
+        out.extend((r.channels.len() as u32).to_le_bytes());
+        out.extend((n as u32).to_le_bytes());
+        for s in r.channels.iter().flatten() {
+            out.extend(s.to_le_bytes());
+        }
+        Ok(Response::new(out))
+    })
+    .await
+}
+
+/// Stops the running render.
+#[tauri::command]
+fn cancel_render() {
+    RENDER.fetch_add(1, Ordering::SeqCst);
+}
+
 /// Sound metrics of solved points under the project's measurements as they are now.
 #[tauri::command]
 fn evaluate(project: Value, points: Vec<PointOutcome>) -> Result<Metrics, String> {
@@ -483,7 +526,9 @@ pub fn run() {
             cabin_tf_impulse,
             evaluate,
             compare,
-            listen
+            listen,
+            render,
+            cancel_render
         ])
         .run(tauri::generate_context!())
         .expect("error while running the app");

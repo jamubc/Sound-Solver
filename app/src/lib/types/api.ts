@@ -144,6 +144,54 @@ export type SolverKind = "time_domain" | "four_pole";
  */
 export type Limiter = "minmod" | "van_leer" | "van_leer_tvb";
 /**
+ * Who hears the scene. Positions are in the vehicle frame (X forward, Y left, Z up, origin at
+ * the downpipe flange), mm.
+ *
+ * This interface was referenced by `Api`'s JSON-Schema
+ * via the `definition` "Listener".
+ */
+export type Listener =
+  | {
+      kind: "receiver";
+    }
+  | {
+      ear_spacing_mm: number;
+      kind: "stereo";
+    }
+  | {
+      kind: "points";
+      positions_mm: [number, number, number][];
+    }
+  | {
+      kind: "pass_by";
+      /**
+       * @minItems 3
+       * @maxItems 3
+       */
+      mic_mm: [number, number, number];
+      speed_kmh: [number, number][];
+      start_mm: number;
+    }
+  | {
+      kind: "cabin";
+    };
+/**
+ * A render in progress.
+ *
+ * This interface was referenced by `Api`'s JSON-Schema
+ * via the `definition` "RenderProgress".
+ */
+export type RenderProgress =
+  | {
+      cycle: number;
+      residual?: number | null;
+      stage: "settle";
+    }
+  | {
+      fraction: number;
+      stage: "march";
+    };
+/**
  * A point either solved or failed; failures carry the reason and no numbers.
  *
  * This interface was referenced by `Api`'s JSON-Schema
@@ -181,6 +229,9 @@ export interface Api {
         status: "failed";
       };
   progress: CycleProgress;
+  render: RenderInfo;
+  render_progress: RenderProgress;
+  scene: Scene;
   sweep: SweepResult;
   tracks: OrderTracks;
   tuning: Tuning;
@@ -634,6 +685,107 @@ export interface CycleProgress {
 }
 /**
  * This interface was referenced by `Api`'s JSON-Schema
+ * via the `definition` "RenderInfo".
+ */
+export interface RenderInfo {
+  bands: Band[];
+  cells: number;
+  cfl: number;
+  /**
+   * Largest Courant number of any step of the scene.
+   */
+  cfl_max: number;
+  /**
+   * Name of each channel.
+   */
+  channels: string[];
+  core_version: string;
+  dx_mm: number;
+  gas_table: string;
+  /**
+   * Equivalent continuous level of each channel, dB re 20 µPa.
+   */
+  leq_db: number[];
+  limiter: Limiter;
+  peak_pa: number;
+  /**
+   * Engine held at the start state before t = 0 so every listener hears it from t = 0, s.
+   */
+  pre_roll_s: number;
+  project_hash: string;
+  refinement: Refinement;
+  sample_rate: number;
+  scene: Scene;
+  /**
+   * Engine source model and where its EVO states come from.
+   */
+  source: string;
+  start: StartState;
+  /**
+   * Wall and initial gas temperatures.
+   */
+  thermal: string;
+  warnings: string[];
+}
+/**
+ * One ⅓-octave band (IEC 61260 base-ten centres) and whether the model resolves it.
+ *
+ * This interface was referenced by `Api`'s JSON-Schema
+ * via the `definition` "Band".
+ */
+export interface Band {
+  center_hz: number;
+  lower_hz: number;
+  /**
+   * Why it is not resolved; empty when it is.
+   */
+  reasons: string[];
+  resolved: boolean;
+  upper_hz: number;
+}
+/**
+ * Where the grid-refinement check ran.
+ */
+export interface Refinement {
+  dx_mm: number;
+  fine_dx_mm: number;
+  map_kpa: number;
+  rpm: number;
+}
+/**
+ * What the render plays: engine speed and load against time, and who hears it.
+ *
+ * This interface was referenced by `Api`'s JSON-Schema
+ * via the `definition` "Scene".
+ */
+export interface Scene {
+  /**
+   * Length of the scene, s.
+   */
+  duration_s: number;
+  listener: Listener;
+  /**
+   * Intake manifold pressure against time, `[[t_s, kPa], …]` (a throttle trace); absent:
+   * the project's load line `operating.map_kpa` at the engine speed of the moment.
+   */
+  map_kpa?: [number, number][] | null;
+  /**
+   * Engine speed against time, `[[t_s, rpm], …]`, linear between points, held outside.
+   */
+  rpm: [number, number][];
+}
+/**
+ * The periodic state the scene starts from.
+ */
+export interface StartState {
+  converged: boolean;
+  cycles: number;
+  map_kpa: number;
+  periodicity_residual: number;
+  rpm: number;
+}
+/**
+ * This interface was referenced by `Api`'s JSON-Schema
  * via the `definition` "SweepResult".
  */
 export interface SweepResult {
@@ -776,4 +928,25 @@ export interface Tuning {
   rpm: number;
   target_hz: number;
   value: number;
+}
+/**
+ * This interface was referenced by `Api`'s JSON-Schema
+ * via the `definition` "Refinement".
+ */
+export interface Refinement1 {
+  dx_mm: number;
+  fine_dx_mm: number;
+  map_kpa: number;
+  rpm: number;
+}
+/**
+ * This interface was referenced by `Api`'s JSON-Schema
+ * via the `definition` "StartState".
+ */
+export interface StartState1 {
+  converged: boolean;
+  cycles: number;
+  map_kpa: number;
+  periodicity_residual: number;
+  rpm: number;
 }

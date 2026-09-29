@@ -29,7 +29,7 @@ use serde::{Deserialize, Serialize};
 
 use crate::error::{Error, Result};
 use crate::gas1d::{EvoSupply, Limiter, MapSchedule, Node};
-use crate::geometry::{Vec3, norm, scale, sub};
+use crate::geometry::{Vec3, add, norm, scale, sub, unit};
 use crate::math::Trace;
 use crate::project::{CabinTf, Project};
 use crate::radiation::{Motion, listener_pressure};
@@ -69,8 +69,11 @@ pub struct Scene {
 pub enum Listener {
     /// The project's receiver: one channel.
     Receiver,
-    /// Microphones at rest beside the vehicle: one channel each (two at ear spacing for a
-    /// stereo listener, left ear first).
+    /// A head at the receiver facing the reference outlet, ears `ear_spacing_mm` apart on the
+    /// horizontal line across that direction: two channels, left ear first. Each ear is a
+    /// free-field point; the head's shadow is not modelled.
+    Stereo { ear_spacing_mm: f64 },
+    /// Microphones at rest beside the vehicle: one channel each.
     Points { positions_mm: Vec<Vec3> },
     /// The vehicle drives along its +x axis past a microphone at rest. `mic_mm` is in the
     /// frame the vehicle frame coincides with after travelling 0; the vehicle frame starts at
@@ -391,18 +394,30 @@ fn play(
             vec![("driver's ear".into(), receiver()?)],
             Motion::at_rest(),
         ),
+        Listener::Stereo { ear_spacing_mm } => {
+            if !(ear_spacing_mm.is_finite() && *ear_spacing_mm > 0.0) {
+                return Err(Error::invalid("the ear spacing must be positive"));
+            }
+            let r = reference_outlet(project, &st.model)?;
+            let head = receiver_position(project, &st.model, r);
+            let o = st.model.outlets[r].position;
+            let facing = unit([o[0] - head[0], o[1] - head[1], 0.0]);
+            let left = scale([-facing[1], facing[0], 0.0], 0.5 * ear_spacing_mm * 1e-3);
+            (
+                vec![
+                    ("left ear".into(), add(head, left)),
+                    ("right ear".into(), sub(head, left)),
+                ],
+                Motion::at_rest(),
+            )
+        }
         Listener::Points { positions_mm } => {
             if positions_mm.is_empty() {
                 return Err(Error::invalid("the listener needs at least one position"));
             }
-            let names: Vec<String> = match positions_mm.len() {
-                2 => vec!["left".into(), "right".into()],
-                _ => (1..=positions_mm.len())
-                    .map(|i| format!("mic {i}"))
-                    .collect(),
-            };
+            let names = (1..=positions_mm.len()).map(|i| format!("mic {i}"));
             let points = positions_mm.iter().map(|p| scale(*p, 1e-3));
-            (names.into_iter().zip(points).collect(), Motion::at_rest())
+            (names.zip(points).collect(), Motion::at_rest())
         }
         Listener::PassBy {
             mic_mm,

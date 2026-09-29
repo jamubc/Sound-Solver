@@ -11,6 +11,9 @@ import type {
   OrderTracks,
   Package,
   PointOutcome,
+  RenderInfo,
+  RenderProgress,
+  Scene,
   SweepResult,
   Tuning,
 } from './types/api';
@@ -29,6 +32,12 @@ export interface Sound {
   peakPa: number;
   dropped: number;
   samples: Float32Array;
+}
+
+/** A scene marched by the solver: each listener channel's pressure, Pa, and how it was made. */
+export interface Rendered {
+  info: RenderInfo;
+  channels: Float32Array[];
 }
 
 export const backend = {
@@ -96,6 +105,20 @@ export const backend = {
       samples: new Float32Array(bytes, 20),
     };
   },
+  /** Marches the project through `scene`; a newer render or `cancelRender` stops it. */
+  async render(project: Project, scene: Scene, onProgress: (progress: RenderProgress) => void): Promise<Rendered> {
+    const progress = new Channel<RenderProgress>();
+    progress.onmessage = onProgress;
+    const bytes = await invoke<ArrayBuffer>('render', { project, scene, onProgress: progress });
+    const view = new DataView(bytes);
+    const length = view.getUint32(0, true);
+    const info = JSON.parse(new TextDecoder().decode(new Uint8Array(bytes, 4, length))) as RenderInfo;
+    const at = 4 + length;
+    const [count, n] = [view.getUint32(at, true), view.getUint32(at + 4, true)];
+    const channels = Array.from({ length: count }, (_, c) => new Float32Array(bytes, at + 8 + 4 * n * c, n));
+    return { info, channels };
+  },
+  cancelRender: () => invoke<void>('cancel_render'),
   /** Engine orders of `b` against `a`. */
   compare: (project: Project, a: PointOutcome[], b: PointOutcome[]) =>
     invoke<OrderDifference[]>('compare', { project, a, b }),

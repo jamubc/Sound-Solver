@@ -32,6 +32,15 @@
     "progress": {
       "$ref": "#/$defs/CycleProgress"
     },
+    "render": {
+      "$ref": "#/$defs/RenderInfo"
+    },
+    "render_progress": {
+      "$ref": "#/$defs/RenderProgress"
+    },
+    "scene": {
+      "$ref": "#/$defs/Scene"
+    },
     "sweep": {
       "$ref": "#/$defs/SweepResult"
     },
@@ -52,9 +61,47 @@
     "clearance",
     "tuning",
     "tracks",
-    "differences"
+    "differences",
+    "scene",
+    "render",
+    "render_progress"
   ],
   "$defs": {
+    "Band": {
+      "description": "One ⅓-octave band (IEC 61260 base-ten centres) and whether the model resolves it.",
+      "type": "object",
+      "properties": {
+        "center_hz": {
+          "type": "number",
+          "format": "double"
+        },
+        "lower_hz": {
+          "type": "number",
+          "format": "double"
+        },
+        "reasons": {
+          "description": "Why it is not resolved; empty when it is.",
+          "type": "array",
+          "items": {
+            "type": "string"
+          }
+        },
+        "resolved": {
+          "type": "boolean"
+        },
+        "upper_hz": {
+          "type": "number",
+          "format": "double"
+        }
+      },
+      "required": [
+        "center_hz",
+        "lower_hz",
+        "upper_hz",
+        "resolved",
+        "reasons"
+      ]
+    },
     "Clearance": {
       "type": "object",
       "properties": {
@@ -443,6 +490,127 @@
         "spl_db",
         "spl_dba",
         "phase_rad"
+      ]
+    },
+    "Listener": {
+      "description": "Who hears the scene. Positions are in the vehicle frame (X forward, Y left, Z up, origin at\nthe downpipe flange), mm.",
+      "oneOf": [
+        {
+          "description": "The project's receiver: one channel.",
+          "type": "object",
+          "properties": {
+            "kind": {
+              "type": "string",
+              "const": "receiver"
+            }
+          },
+          "additionalProperties": false,
+          "required": [
+            "kind"
+          ]
+        },
+        {
+          "description": "A head at the receiver facing the reference outlet, ears `ear_spacing_mm` apart on the\nhorizontal line across that direction: two channels, left ear first. Each ear is a\nfree-field point; the head's shadow is not modelled.",
+          "type": "object",
+          "properties": {
+            "ear_spacing_mm": {
+              "type": "number",
+              "format": "double"
+            },
+            "kind": {
+              "type": "string",
+              "const": "stereo"
+            }
+          },
+          "additionalProperties": false,
+          "required": [
+            "kind",
+            "ear_spacing_mm"
+          ]
+        },
+        {
+          "description": "Microphones at rest beside the vehicle: one channel each.",
+          "type": "object",
+          "properties": {
+            "kind": {
+              "type": "string",
+              "const": "points"
+            },
+            "positions_mm": {
+              "type": "array",
+              "items": {
+                "type": "array",
+                "items": {
+                  "type": "number",
+                  "format": "double"
+                },
+                "maxItems": 3,
+                "minItems": 3
+              }
+            }
+          },
+          "additionalProperties": false,
+          "required": [
+            "kind",
+            "positions_mm"
+          ]
+        },
+        {
+          "description": "The vehicle drives along its +x axis past a microphone at rest. `mic_mm` is in the\nframe the vehicle frame coincides with after travelling 0; the vehicle frame starts at\n`start_mm` along x and moves at `speed_kmh` against time, `[[t_s, km/h], …]`.",
+          "type": "object",
+          "properties": {
+            "kind": {
+              "type": "string",
+              "const": "pass_by"
+            },
+            "mic_mm": {
+              "type": "array",
+              "items": {
+                "type": "number",
+                "format": "double"
+              },
+              "maxItems": 3,
+              "minItems": 3
+            },
+            "speed_kmh": {
+              "type": "array",
+              "items": {
+                "type": "array",
+                "items": {
+                  "type": "number",
+                  "format": "double"
+                },
+                "maxItems": 2,
+                "minItems": 2
+              }
+            },
+            "start_mm": {
+              "type": "number",
+              "format": "double"
+            }
+          },
+          "additionalProperties": false,
+          "required": [
+            "kind",
+            "mic_mm",
+            "start_mm",
+            "speed_kmh"
+          ]
+        },
+        {
+          "description": "The driver's ear: the receiver's pressure through the measured cabin transfer function.",
+          "type": "object",
+          "properties": {
+            "kind": {
+              "type": "string",
+              "const": "cabin"
+            }
+          },
+          "additionalProperties": false,
+          "required": [
+            "kind"
+          ]
+        }
       ]
     },
     "Manifest": {
@@ -1301,6 +1469,198 @@
         "warnings"
       ]
     },
+    "Refinement": {
+      "type": "object",
+      "properties": {
+        "dx_mm": {
+          "type": "number",
+          "format": "double"
+        },
+        "fine_dx_mm": {
+          "type": "number",
+          "format": "double"
+        },
+        "map_kpa": {
+          "type": "number",
+          "format": "double"
+        },
+        "rpm": {
+          "type": "number",
+          "format": "double"
+        }
+      },
+      "required": [
+        "rpm",
+        "map_kpa",
+        "dx_mm",
+        "fine_dx_mm"
+      ]
+    },
+    "RenderInfo": {
+      "type": "object",
+      "properties": {
+        "bands": {
+          "type": "array",
+          "items": {
+            "$ref": "#/$defs/Band"
+          }
+        },
+        "cells": {
+          "type": "integer",
+          "format": "uint",
+          "minimum": 0
+        },
+        "cfl": {
+          "type": "number",
+          "format": "double"
+        },
+        "cfl_max": {
+          "description": "Largest Courant number of any step of the scene.",
+          "type": "number",
+          "format": "double"
+        },
+        "channels": {
+          "description": "Name of each channel.",
+          "type": "array",
+          "items": {
+            "type": "string"
+          }
+        },
+        "core_version": {
+          "type": "string"
+        },
+        "dx_mm": {
+          "type": "number",
+          "format": "double"
+        },
+        "gas_table": {
+          "type": "string"
+        },
+        "leq_db": {
+          "description": "Equivalent continuous level of each channel, dB re 20 µPa.",
+          "type": "array",
+          "items": {
+            "type": "number",
+            "format": "double"
+          }
+        },
+        "limiter": {
+          "$ref": "#/$defs/Limiter"
+        },
+        "peak_pa": {
+          "type": "number",
+          "format": "double"
+        },
+        "pre_roll_s": {
+          "description": "Engine held at the start state before t = 0 so every listener hears it from t = 0, s.",
+          "type": "number",
+          "format": "double"
+        },
+        "project_hash": {
+          "type": "string"
+        },
+        "refinement": {
+          "description": "Where the grid-refinement check ran.",
+          "$ref": "#/$defs/Refinement"
+        },
+        "sample_rate": {
+          "type": "number",
+          "format": "double"
+        },
+        "scene": {
+          "$ref": "#/$defs/Scene"
+        },
+        "source": {
+          "description": "Engine source model and where its EVO states come from.",
+          "type": "string"
+        },
+        "start": {
+          "description": "The periodic state the scene starts from.",
+          "$ref": "#/$defs/StartState"
+        },
+        "thermal": {
+          "description": "Wall and initial gas temperatures.",
+          "type": "string"
+        },
+        "warnings": {
+          "type": "array",
+          "items": {
+            "type": "string"
+          }
+        }
+      },
+      "required": [
+        "core_version",
+        "project_hash",
+        "scene",
+        "sample_rate",
+        "channels",
+        "peak_pa",
+        "leq_db",
+        "dx_mm",
+        "cells",
+        "cfl",
+        "cfl_max",
+        "limiter",
+        "gas_table",
+        "thermal",
+        "source",
+        "start",
+        "pre_roll_s",
+        "refinement",
+        "bands",
+        "warnings"
+      ]
+    },
+    "RenderProgress": {
+      "description": "A render in progress.",
+      "oneOf": [
+        {
+          "description": "Settling the network at the scene's start.",
+          "type": "object",
+          "properties": {
+            "cycle": {
+              "type": "integer",
+              "format": "uint32",
+              "minimum": 0
+            },
+            "residual": {
+              "type": [
+                "number",
+                "null"
+              ],
+              "format": "double"
+            },
+            "stage": {
+              "type": "string",
+              "const": "settle"
+            }
+          },
+          "required": [
+            "stage",
+            "cycle"
+          ]
+        },
+        {
+          "description": "Marching the scene: fraction of the recorded time done.",
+          "type": "object",
+          "properties": {
+            "fraction": {
+              "type": "number",
+              "format": "double"
+            },
+            "stage": {
+              "type": "string",
+              "const": "march"
+            }
+          },
+          "required": [
+            "stage",
+            "fraction"
+          ]
+        }
+      ]
+    },
     "RouteClearance": {
       "type": "object",
       "properties": {
@@ -1477,12 +1837,93 @@
         "parts"
       ]
     },
+    "Scene": {
+      "description": "What the render plays: engine speed and load against time, and who hears it.",
+      "type": "object",
+      "properties": {
+        "duration_s": {
+          "description": "Length of the scene, s.",
+          "type": "number",
+          "format": "double"
+        },
+        "listener": {
+          "$ref": "#/$defs/Listener"
+        },
+        "map_kpa": {
+          "description": "Intake manifold pressure against time, `[[t_s, kPa], …]` (a throttle trace); absent:\nthe project's load line `operating.map_kpa` at the engine speed of the moment.",
+          "type": [
+            "array",
+            "null"
+          ],
+          "items": {
+            "type": "array",
+            "items": {
+              "type": "number",
+              "format": "double"
+            },
+            "maxItems": 2,
+            "minItems": 2
+          }
+        },
+        "rpm": {
+          "description": "Engine speed against time, `[[t_s, rpm], …]`, linear between points, held outside.",
+          "type": "array",
+          "items": {
+            "type": "array",
+            "items": {
+              "type": "number",
+              "format": "double"
+            },
+            "maxItems": 2,
+            "minItems": 2
+          }
+        }
+      },
+      "additionalProperties": false,
+      "required": [
+        "duration_s",
+        "rpm",
+        "listener"
+      ]
+    },
     "SolverKind": {
       "description": "Which solver produced a result.",
       "type": "string",
       "enum": [
         "time_domain",
         "four_pole"
+      ]
+    },
+    "StartState": {
+      "type": "object",
+      "properties": {
+        "converged": {
+          "type": "boolean"
+        },
+        "cycles": {
+          "type": "integer",
+          "format": "uint32",
+          "minimum": 0
+        },
+        "map_kpa": {
+          "type": "number",
+          "format": "double"
+        },
+        "periodicity_residual": {
+          "type": "number",
+          "format": "double"
+        },
+        "rpm": {
+          "type": "number",
+          "format": "double"
+        }
+      },
+      "required": [
+        "rpm",
+        "map_kpa",
+        "cycles",
+        "periodicity_residual",
+        "converged"
       ]
     },
     "Stick": {
