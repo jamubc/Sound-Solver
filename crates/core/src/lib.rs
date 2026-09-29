@@ -1,0 +1,16 @@
+//! `exhaust-core`: gas dynamics and acoustics of vehicle exhaust systems.
+
+pub mod engine;
+pub mod error;
+pub mod gas;
+pub mod gas1d;
+pub mod geometry;
+pub mod math;
+pub mod model;
+pub mod project;
+pub mod radiation;
+pub mod solve;
+pub mod spectrum;
+pub mod validation;
+
+pub use error::{Error, Result};

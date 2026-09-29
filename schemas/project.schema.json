@@ -1,0 +1,845 @@
+{
+  "$schema": "https://json-schema.org/draft/2020-12/schema",
+  "title": "Project",
+  "type": "object",
+  "properties": {
+    "ambient": {
+      "$ref": "#/$defs/Ambient"
+    },
+    "basis": {
+      "description": "Origin of each value, keyed by dotted field path (e.g. `engine.geometry.bore_mm`).\nThe UI shows the label next to the value; unlisted values are user input.",
+      "type": "object",
+      "additionalProperties": {
+        "$ref": "#/$defs/Basis"
+      },
+      "default": {}
+    },
+    "engine": {
+      "$ref": "#/$defs/EngineSpec"
+    },
+    "gas": {
+      "$ref": "#/$defs/GasSpec"
+    },
+    "materials": {
+      "type": "array",
+      "items": {
+        "$ref": "#/$defs/Material"
+      }
+    },
+    "name": {
+      "type": "string"
+    },
+    "notes": {
+      "type": "string"
+    },
+    "operating": {
+      "$ref": "#/$defs/Operating"
+    },
+    "receiver": {
+      "$ref": "#/$defs/Receiver"
+    },
+    "schema_version": {
+      "type": "integer",
+      "format": "uint32",
+      "minimum": 0
+    },
+    "solver": {
+      "$ref": "#/$defs/SolverSettings"
+    },
+    "system": {
+      "$ref": "#/$defs/System"
+    },
+    "turbine": {
+      "$ref": "#/$defs/TurbineSpec"
+    }
+  },
+  "additionalProperties": false,
+  "required": [
+    "schema_version",
+    "name",
+    "engine",
+    "turbine",
+    "gas",
+    "ambient",
+    "operating",
+    "system",
+    "receiver",
+    "solver",
+    "materials"
+  ],
+  "$defs": {
+    "Ambient": {
+      "type": "object",
+      "properties": {
+        "ground_z_mm": {
+          "description": "Height of the ground plane in vehicle coordinates, mm (negative: below the flange).",
+          "type": "number",
+          "format": "double"
+        },
+        "pressure_pa": {
+          "type": "number",
+          "format": "double"
+        },
+        "temperature_k": {
+          "type": "number",
+          "format": "double"
+        },
+        "vehicle_speed_kmh": {
+          "description": "Vehicle speed; sets the external film coefficient in the thermal model.",
+          "type": "number",
+          "format": "double"
+        }
+      },
+      "additionalProperties": false,
+      "required": [
+        "pressure_pa",
+        "temperature_k",
+        "vehicle_speed_kmh",
+        "ground_z_mm"
+      ]
+    },
+    "Basis": {
+      "description": "Where a value comes from.",
+      "oneOf": [
+        {
+          "description": "Manufacturer or standard publication.",
+          "type": "string",
+          "const": "published"
+        },
+        {
+          "description": "From memory or forum measurements; replace with a measurement.",
+          "type": "string",
+          "const": "approximate"
+        },
+        {
+          "description": "Measured on the vehicle by the owner.",
+          "type": "string",
+          "const": "measured"
+        },
+        {
+          "description": "Chosen by the owner.",
+          "type": "string",
+          "const": "owner_set"
+        },
+        {
+          "description": "Not known; a placeholder the results depend on.",
+          "type": "string",
+          "const": "unknown"
+        }
+      ]
+    },
+    "Element": {
+      "description": "Element types. Each has fixed port names.",
+      "type": "object",
+      "properties": {
+        "axis": {
+          "description": "Flow direction through the element (normalised on use).",
+          "type": "array",
+          "default": [
+            -1.0,
+            0.0,
+            0.0
+          ],
+          "items": {
+            "type": "number",
+            "format": "double"
+          },
+          "maxItems": 3,
+          "minItems": 3
+        },
+        "id": {
+          "type": "string"
+        },
+        "position_mm": {
+          "description": "Position of the element's first port, mm.",
+          "type": "array",
+          "items": {
+            "type": "number",
+            "format": "double"
+          },
+          "maxItems": 3,
+          "minItems": 3
+        }
+      },
+      "oneOf": [
+        {
+          "description": "Engine and turbine; port `out` is the downpipe flange face.",
+          "type": "object",
+          "properties": {
+            "type": {
+              "type": "string",
+              "const": "source"
+            }
+          },
+          "required": [
+            "type"
+          ]
+        },
+        {
+          "description": "Unflanged tailpipe tip radiating to atmosphere; port `in`.",
+          "type": "object",
+          "properties": {
+            "type": {
+              "type": "string",
+              "const": "outlet"
+            }
+          },
+          "required": [
+            "type"
+          ]
+        },
+        {
+          "description": "Joins two pipes of different bore: sudden when `taper_length_mm` is 0, otherwise a\ncone of that length. Ports `in`, `out`; bores come from the connected pipes.",
+          "type": "object",
+          "properties": {
+            "taper_length_mm": {
+              "type": "number",
+              "format": "double"
+            },
+            "type": {
+              "type": "string",
+              "const": "area_change"
+            }
+          },
+          "required": [
+            "type",
+            "taper_length_mm"
+          ]
+        },
+        {
+          "description": "Closed pipe end; port `in`.",
+          "type": "object",
+          "properties": {
+            "type": {
+              "type": "string",
+              "const": "cap"
+            }
+          },
+          "required": [
+            "type"
+          ]
+        }
+      ],
+      "required": [
+        "id",
+        "position_mm"
+      ]
+    },
+    "EngineGeometry": {
+      "description": "Slider-crank geometry and firing order.",
+      "type": "object",
+      "properties": {
+        "bore_mm": {
+          "description": "Bore, mm.",
+          "type": "number",
+          "format": "double"
+        },
+        "compression_ratio": {
+          "description": "Geometric compression ratio.",
+          "type": "number",
+          "format": "double"
+        },
+        "firing_order": {
+          "description": "Firing order, 1-based cylinder numbers. Four-stroke: cylinders fire at equal intervals\nof 720°/n.",
+          "type": "array",
+          "items": {
+            "type": "integer",
+            "format": "uint",
+            "minimum": 0
+          }
+        },
+        "rod_mm": {
+          "description": "Connecting-rod centre distance, mm.",
+          "type": "number",
+          "format": "double"
+        },
+        "stroke_mm": {
+          "description": "Stroke, mm.",
+          "type": "number",
+          "format": "double"
+        }
+      },
+      "required": [
+        "bore_mm",
+        "stroke_mm",
+        "rod_mm",
+        "compression_ratio",
+        "firing_order"
+      ]
+    },
+    "EngineSpec": {
+      "type": "object",
+      "properties": {
+        "geometry": {
+          "$ref": "#/$defs/EngineGeometry"
+        },
+        "label": {
+          "type": "string"
+        },
+        "polytropic_exponent": {
+          "description": "Polytropic exponent of the cylinder gas after EVO.",
+          "type": "number",
+          "format": "double"
+        },
+        "valves": {
+          "$ref": "#/$defs/ExhaustValves"
+        }
+      },
+      "additionalProperties": false,
+      "required": [
+        "label",
+        "geometry",
+        "valves",
+        "polytropic_exponent"
+      ]
+    },
+    "EvoState": {
+      "description": "In-cylinder state at exhaust valve opening.",
+      "type": "object",
+      "properties": {
+        "pressure_pa": {
+          "description": "Pa.",
+          "type": "number",
+          "format": "double"
+        },
+        "temperature_k": {
+          "description": "K.",
+          "type": "number",
+          "format": "double"
+        }
+      },
+      "required": [
+        "pressure_pa",
+        "temperature_k"
+      ]
+    },
+    "ExhaustValves": {
+      "description": "Exhaust valve train of one cylinder.",
+      "type": "object",
+      "properties": {
+        "discharge_coefficient": {
+          "description": "Discharge coefficient referred to the geometric flow area.",
+          "type": "number",
+          "format": "double"
+        },
+        "evc_deg": {
+          "description": "Exhaust valve closing, crank degrees after firing TDC (e.g. 370 = 10° after gas-exchange TDC).",
+          "type": "number",
+          "format": "double"
+        },
+        "evo_deg": {
+          "description": "Exhaust valve opening, crank degrees after firing TDC.",
+          "type": "number",
+          "format": "double"
+        },
+        "lift_table": {
+          "description": "Measured lift curve: (crank degrees after firing TDC, lift mm), linearly interpolated.",
+          "type": [
+            "array",
+            "null"
+          ],
+          "items": {
+            "type": "array",
+            "items": {
+              "type": "number",
+              "format": "double"
+            },
+            "maxItems": 2,
+            "minItems": 2
+          }
+        },
+        "max_lift_mm": {
+          "description": "Peak lift, mm, of the raised-cosine profile `L = L_max (1 − cos 2πφ)/2`,\n`φ = (θ − EVO)/(EVC − EVO)`. Ignored when `lift_table` is given.",
+          "type": "number",
+          "format": "double"
+        },
+        "throat_diameter_mm": {
+          "description": "Port throat (inner seat) diameter, mm; caps the flow area at π d²/4 per valve.",
+          "type": "number",
+          "format": "double"
+        },
+        "valve_diameter_mm": {
+          "description": "Valve head diameter, mm (curtain area π d L).",
+          "type": "number",
+          "format": "double"
+        },
+        "valves_per_cylinder": {
+          "type": "integer",
+          "format": "uint",
+          "minimum": 0
+        }
+      },
+      "required": [
+        "valves_per_cylinder",
+        "valve_diameter_mm",
+        "throat_diameter_mm",
+        "discharge_coefficient",
+        "evo_deg",
+        "evc_deg",
+        "max_lift_mm"
+      ]
+    },
+    "GasSpec": {
+      "type": "object",
+      "properties": {
+        "fuel_h_to_c": {
+          "description": "Fuel hydrogen-to-carbon atom ratio (gasoline ≈ 1.87).",
+          "type": "number",
+          "format": "double"
+        },
+        "lambda": {
+          "description": "Air-excess ratio λ (≥ 1).",
+          "type": "number",
+          "format": "double"
+        }
+      },
+      "additionalProperties": false,
+      "required": [
+        "fuel_h_to_c",
+        "lambda"
+      ]
+    },
+    "Limiter": {
+      "description": "TVD slope limiter for MUSCL reconstruction of primitive variables.",
+      "oneOf": [
+        {
+          "description": "`minmod(a, b)`: most dissipative TVD limiter.",
+          "type": "string",
+          "const": "minmod"
+        },
+        {
+          "description": "van Leer (1974): `2ab/(a + b)` when `ab > 0`.",
+          "type": "string",
+          "const": "van_leer"
+        }
+      ]
+    },
+    "Material": {
+      "description": "Tube material.",
+      "type": "object",
+      "properties": {
+        "conductivity_w_mk": {
+          "type": "number",
+          "format": "double"
+        },
+        "density_kg_m3": {
+          "type": "number",
+          "format": "double"
+        },
+        "emissivity": {
+          "description": "Total hemispherical emissivity of the oxidised outer surface.",
+          "type": "number",
+          "format": "double"
+        },
+        "family": {
+          "$ref": "#/$defs/MaterialFamily"
+        },
+        "id": {
+          "type": "string"
+        },
+        "name": {
+          "type": "string"
+        }
+      },
+      "additionalProperties": false,
+      "required": [
+        "id",
+        "name",
+        "family",
+        "density_kg_m3",
+        "conductivity_w_mk",
+        "emissivity"
+      ]
+    },
+    "MaterialFamily": {
+      "type": "string",
+      "enum": [
+        "ferritic_stainless",
+        "austenitic_stainless",
+        "titanium"
+      ]
+    },
+    "Operating": {
+      "type": "object",
+      "properties": {
+        "cruise_band_rpm": {
+          "description": "Engine-speed band searched for drone, rpm.",
+          "type": "array",
+          "items": {
+            "type": "number",
+            "format": "double"
+          },
+          "maxItems": 2,
+          "minItems": 2
+        },
+        "evo_override": {
+          "description": "Measured in-cylinder state at EVO; replaces the Otto-cycle estimate when present.",
+          "anyOf": [
+            {
+              "$ref": "#/$defs/EvoState"
+            },
+            {
+              "type": "null"
+            }
+          ]
+        },
+        "heat_retained": {
+          "description": "Fraction of fuel heating value in the cylinder gas after combustion and wall losses.",
+          "type": "number",
+          "format": "double"
+        },
+        "intake_temperature_k": {
+          "type": "number",
+          "format": "double"
+        },
+        "lhv_mj_per_kg": {
+          "type": "number",
+          "format": "double"
+        },
+        "map_kpa": {
+          "description": "Intake manifold absolute pressure against engine speed: `[[rpm, kPa], …]`, linear,\nheld constant outside the table.",
+          "type": "array",
+          "items": {
+            "type": "array",
+            "items": {
+              "type": "number",
+              "format": "double"
+            },
+            "maxItems": 2,
+            "minItems": 2
+          }
+        },
+        "n_compression": {
+          "type": "number",
+          "format": "double"
+        },
+        "n_expansion": {
+          "type": "number",
+          "format": "double"
+        },
+        "sweep_rpm": {
+          "description": "Default sweep: `[start, stop, step]`, rpm.",
+          "type": "array",
+          "items": {
+            "type": "number",
+            "format": "double"
+          },
+          "maxItems": 3,
+          "minItems": 3
+        },
+        "volumetric_efficiency": {
+          "type": "number",
+          "format": "double"
+        }
+      },
+      "additionalProperties": false,
+      "required": [
+        "map_kpa",
+        "intake_temperature_k",
+        "volumetric_efficiency",
+        "lhv_mj_per_kg",
+        "heat_retained",
+        "n_compression",
+        "n_expansion",
+        "cruise_band_rpm",
+        "sweep_rpm"
+      ]
+    },
+    "PipeSpec": {
+      "type": "object",
+      "properties": {
+        "material": {
+          "description": "Material id from `materials`.",
+          "type": "string"
+        },
+        "od_mm": {
+          "type": "number",
+          "format": "double"
+        },
+        "wall_mm": {
+          "type": "number",
+          "format": "double"
+        }
+      },
+      "additionalProperties": false,
+      "required": [
+        "od_mm",
+        "wall_mm",
+        "material"
+      ]
+    },
+    "PortRef": {
+      "description": "A port on an element.",
+      "type": "object",
+      "properties": {
+        "element": {
+          "type": "string"
+        },
+        "port": {
+          "type": "string"
+        }
+      },
+      "additionalProperties": false,
+      "required": [
+        "element",
+        "port"
+      ]
+    },
+    "Receiver": {
+      "description": "Microphone position (ISO 5130 by default: 0.5 m from the outlet, 45° to its axis,\noutlet height, on the outboard side).",
+      "type": "object",
+      "properties": {
+        "angle_deg": {
+          "type": "number",
+          "format": "double"
+        },
+        "distance_m": {
+          "type": "number",
+          "format": "double"
+        },
+        "outlet": {
+          "description": "Reference outlet element id; the first outlet when absent.",
+          "type": [
+            "string",
+            "null"
+          ]
+        }
+      },
+      "additionalProperties": false,
+      "required": [
+        "distance_m",
+        "angle_deg"
+      ]
+    },
+    "Route": {
+      "description": "A bent tube between two ports.",
+      "type": "object",
+      "properties": {
+        "bend_radius_mm": {
+          "description": "Centreline bend radius at each interior vertex, mm; `null` uses 1.5 × OD.",
+          "type": "array",
+          "default": [],
+          "items": {
+            "type": [
+              "number",
+              "null"
+            ],
+            "format": "double"
+          }
+        },
+        "from": {
+          "$ref": "#/$defs/PortRef"
+        },
+        "id": {
+          "type": "string"
+        },
+        "pipe": {
+          "$ref": "#/$defs/PipeSpec"
+        },
+        "to": {
+          "$ref": "#/$defs/PortRef"
+        },
+        "via_mm": {
+          "description": "Interior centreline vertices, mm; the ends are the ports' positions.",
+          "type": "array",
+          "default": [],
+          "items": {
+            "type": "array",
+            "items": {
+              "type": "number",
+              "format": "double"
+            },
+            "maxItems": 3,
+            "minItems": 3
+          }
+        }
+      },
+      "additionalProperties": false,
+      "required": [
+        "id",
+        "from",
+        "to",
+        "pipe"
+      ]
+    },
+    "ScrollSpec": {
+      "type": "object",
+      "properties": {
+        "cylinders": {
+          "description": "1-based cylinders feeding this scroll.",
+          "type": "array",
+          "items": {
+            "type": "integer",
+            "format": "uint",
+            "minimum": 0
+          }
+        },
+        "manifold_volume_l": {
+          "description": "Volume of exhaust ports, manifold runners and scroll, litres.",
+          "type": "number",
+          "format": "double"
+        },
+        "nozzle_area_cm2": {
+          "description": "Effective nozzle area `C_d A` of the scroll including an open wastegate, cm².",
+          "type": "number",
+          "format": "double"
+        }
+      },
+      "additionalProperties": false,
+      "required": [
+        "cylinders",
+        "manifold_volume_l",
+        "nozzle_area_cm2"
+      ]
+    },
+    "SolverSettings": {
+      "type": "object",
+      "properties": {
+        "cfl": {
+          "description": "Courant number, ≤ 0.8.",
+          "type": "number",
+          "format": "double"
+        },
+        "dx_mm": {
+          "description": "Target cell length, mm (10–20 mm baseline).",
+          "type": "number",
+          "format": "double"
+        },
+        "friction": {
+          "type": "boolean"
+        },
+        "limiter": {
+          "$ref": "#/$defs/Limiter"
+        },
+        "max_cycles": {
+          "type": "integer",
+          "format": "uint32",
+          "minimum": 0
+        },
+        "max_frequency_hz": {
+          "type": "number",
+          "format": "double"
+        },
+        "min_cycles": {
+          "type": "integer",
+          "format": "uint32",
+          "minimum": 0
+        },
+        "periodicity_tolerance": {
+          "description": "Converged when the last cycle differs from the one before by less than this fraction\n(RMS of the difference over RMS of the fluctuation) in every monitored signal.",
+          "type": "number",
+          "format": "double"
+        },
+        "samples_per_cycle": {
+          "description": "Output samples per engine cycle (power of two).",
+          "type": "integer",
+          "format": "uint32",
+          "minimum": 0
+        },
+        "wall_roughness_mm": {
+          "type": "number",
+          "format": "double"
+        },
+        "wall_thermal": {
+          "$ref": "#/$defs/WallThermal"
+        }
+      },
+      "additionalProperties": false,
+      "required": [
+        "dx_mm",
+        "cfl",
+        "limiter",
+        "min_cycles",
+        "max_cycles",
+        "periodicity_tolerance",
+        "samples_per_cycle",
+        "max_frequency_hz",
+        "wall_roughness_mm",
+        "friction",
+        "wall_thermal"
+      ]
+    },
+    "System": {
+      "description": "Exhaust system graph.",
+      "type": "object",
+      "properties": {
+        "elements": {
+          "type": "array",
+          "items": {
+            "$ref": "#/$defs/Element"
+          }
+        },
+        "routes": {
+          "type": "array",
+          "items": {
+            "$ref": "#/$defs/Route"
+          }
+        }
+      },
+      "additionalProperties": false,
+      "required": [
+        "elements",
+        "routes"
+      ]
+    },
+    "TurbineSpec": {
+      "type": "object",
+      "properties": {
+        "extraction_factor": {
+          "description": "Fraction of the isentropic enthalpy drop across the turbine removed as shaft work.",
+          "type": "number",
+          "format": "double"
+        },
+        "scrolls": {
+          "type": "array",
+          "items": {
+            "$ref": "#/$defs/ScrollSpec"
+          }
+        }
+      },
+      "additionalProperties": false,
+      "required": [
+        "extraction_factor",
+        "scrolls"
+      ]
+    },
+    "WallThermal": {
+      "description": "How the pipe wall exchanges heat with the gas in the time-domain solver.",
+      "oneOf": [
+        {
+          "description": "No heat transfer.",
+          "type": "object",
+          "properties": {
+            "model": {
+              "type": "string",
+              "const": "adiabatic"
+            }
+          },
+          "additionalProperties": false,
+          "required": [
+            "model"
+          ]
+        },
+        {
+          "description": "Every wall at one temperature.",
+          "type": "object",
+          "properties": {
+            "model": {
+              "type": "string",
+              "const": "fixed"
+            },
+            "temperature_k": {
+              "type": "number",
+              "format": "double"
+            }
+          },
+          "additionalProperties": false,
+          "required": [
+            "model",
+            "temperature_k"
+          ]
+        }
+      ]
+    }
+  }
+}
