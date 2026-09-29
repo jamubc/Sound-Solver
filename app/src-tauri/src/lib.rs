@@ -9,6 +9,7 @@
 use std::path::PathBuf;
 use std::sync::atomic::{AtomicU64, Ordering};
 
+use exhaust_core::edit;
 use exhaust_core::layout::{Layout, layout};
 use exhaust_core::manifest::{self, Manifest};
 use exhaust_core::metrics;
@@ -60,6 +61,23 @@ fn check(project: Value) -> Result<Layout, String> {
 #[tauri::command]
 fn manifests() -> Vec<Manifest> {
     manifest::all().to_vec()
+}
+
+/// Places a new element of type `kind` on `route` at `s_mm` along it (`edit::insert`); answers
+/// the edited project and the element's id.
+#[tauri::command]
+fn insert_element(project: Value, route: String, s_mm: f64, kind: String) -> Result<Value, String> {
+    let mut project = parse(&project)?;
+    let id = edit::insert(&mut project, &route, s_mm, &kind).map_err(|e| e.to_string())?;
+    Ok(serde_json::json!({ "project": to_value(&project), "id": id }))
+}
+
+/// Takes a two-port element out, joining its pipes (`edit::remove`).
+#[tauri::command]
+fn remove_element(project: Value, id: String) -> Result<Value, String> {
+    let mut project = parse(&project)?;
+    edit::remove(&mut project, &id).map_err(|e| e.to_string())?;
+    Ok(to_value(&project))
 }
 
 /// Four-pole preview over the project's sweep.
@@ -149,6 +167,8 @@ pub fn run() {
             save_project,
             check,
             manifests,
+            insert_element,
+            remove_element,
             preview,
             solve,
             cancel
@@ -174,6 +194,8 @@ mod tests {
                 stock_project,
                 check,
                 manifests,
+                insert_element,
+                remove_element,
                 preview
             ])
             .build(mock_context(noop_assets()))
@@ -201,6 +223,20 @@ mod tests {
         assert_eq!(manifests.as_array().unwrap().len(), manifest::all().len());
         let preview = call("preview", json!({ "project": project })).expect("preview");
         assert_eq!(preview["solver"], "four_pole");
+        let args = json!({ "project": project, "route": "mid-pipe", "sMm": 300.0, "kind": "quarter_wave_stub" });
+        let inserted = call("insert_element", args).expect("stub on the mid-pipe");
+        assert_eq!(inserted["id"], "quarter_wave_stub");
+        let without = call(
+            "remove_element",
+            json!({ "project": project, "id": "resonator" }),
+        )
+        .expect("resonator delete");
+        assert_eq!(without["system"]["routes"].as_array().unwrap().len(), 5);
+        let refused = call(
+            "remove_element",
+            json!({ "project": project, "id": "muffler" }),
+        );
+        assert!(refused.is_err(), "the dual-outlet muffler has three ports");
         // An unsolvable project comes back as the reason.
         let mut bad = project.clone();
         bad["system"]["elements"][3]["diameter_mm"] = json!(1e4);

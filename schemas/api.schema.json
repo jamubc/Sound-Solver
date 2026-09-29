@@ -459,6 +459,7 @@
       ]
     },
     "PieceLayout": {
+      "description": "A piece of centreline starting `s0_mm` along its route.",
       "oneOf": [
         {
           "type": "object",
@@ -476,6 +477,10 @@
               "type": "string",
               "const": "straight"
             },
+            "s0_mm": {
+              "type": "number",
+              "format": "double"
+            },
             "to": {
               "type": "array",
               "items": {
@@ -488,6 +493,7 @@
           },
           "required": [
             "kind",
+            "s0_mm",
             "from",
             "to"
           ]
@@ -526,6 +532,10 @@
               "type": "number",
               "format": "double"
             },
+            "s0_mm": {
+              "type": "number",
+              "format": "double"
+            },
             "to": {
               "type": "array",
               "items": {
@@ -538,6 +548,7 @@
           },
           "required": [
             "kind",
+            "s0_mm",
             "from",
             "to",
             "centre",

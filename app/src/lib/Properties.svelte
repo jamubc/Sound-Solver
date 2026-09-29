@@ -1,6 +1,7 @@
 <script lang="ts">
+  import { backend } from './backend';
   import { mm } from './format';
-  import { app, edit, manifestOf } from './state.svelte';
+  import { app, commit, edit, manifestOf } from './state.svelte';
   import type { Element, Project, Route } from './types/project';
 
   type Vec3 = [number, number, number];
@@ -55,6 +56,43 @@
       r.via_mm = [...(r.via_mm ?? []), mid];
       r.bend_radius_mm = [...(r.bend_radius_mm ?? []), null].slice(0, r.via_mm.length);
     });
+  }
+
+  /** Element types that sit in a pipe run: one inlet, one outlet. */
+  const inline = $derived(app.manifests.filter((m) => m.ports.join() === 'in,out'));
+  const twoPort = (e: Element) => manifestOf(e.type)?.ports.join() === 'in,out';
+  let placing = $state('quarter_wave_stub');
+  let placeAt = $state<number | null>(null);
+  let failure = $state<string | null>(null);
+  const straights = $derived(
+    (app.layout?.routes.find((r) => r.id === routeId)?.pieces ?? []).flatMap((p) =>
+      p.kind === 'straight' ? [[p.s0_mm, p.s0_mm + Math.hypot(...p.to.map((x, k) => x - p.from[k]))]] : [],
+    ),
+  );
+  // A click on the pipe sets where to place; otherwise the middle of the longest straight run.
+  $effect(() => {
+    const picked = selection?.kind === 'route' ? selection.s_mm : undefined;
+    const longest = straights.reduce((a, b) => (b[1] - b[0] > a[1] - a[0] ? b : a), [0, 0]);
+    placeAt = Math.round(picked ?? (longest[0] + longest[1]) / 2);
+  });
+
+  async function place(id: string) {
+    failure = null;
+    try {
+      const done = await backend.insertElement($state.snapshot(app.project) as Project, id, placeAt ?? 0, placing);
+      commit(done.project, { kind: 'element', id: done.id });
+    } catch (e) {
+      failure = String(e);
+    }
+  }
+
+  async function takeOut(id: string) {
+    failure = null;
+    try {
+      commit(await backend.removeElement($state.snapshot(app.project) as Project, id), null);
+    } catch (e) {
+      failure = String(e);
+    }
   }
 
   function removeVia(id: string, i: number) {
@@ -128,6 +166,12 @@
         </div>
       {/if}
     {/each}
+    {#if twoPort(element)}
+      <button class="gap" onclick={() => takeOut(element.id)} title="Join the pipes either side through where it was">
+        Remove {element.id}
+      </button>
+    {/if}
+    {#if failure}<p class="failure">{failure}</p>{/if}
   {:else if route}
     {@const layout = app.layout?.routes.find((r) => r.id === route.id)}
     <h2>{route.id}</h2>
@@ -205,6 +249,20 @@
       </div>
     {/each}
     <button onclick={() => addVia(route.id)}>Add via point</button>
+    <h2 class="gap">Place an element on this pipe</h2>
+    <div class="row place">
+      <select bind:value={placing} data-testid="place-kind">
+        {#each inline as m (m.type)}<option value={m.type}>{m.name}</option>{/each}
+      </select>
+      <input type="number" step="1" min="0" bind:value={placeAt} data-testid="place-at" />
+      <span class="unit">mm along</span>
+      <button onclick={() => place(route.id)}>Place</button>
+    </div>
+    <div class="range muted">
+      straight runs: {straights.map(([a, b]) => `${a.toFixed(0)}–${b.toFixed(0)}`).join(', ')} mm; click the
+      pipe to pick a spot
+    </div>
+    {#if failure}<p class="failure">{failure}</p>{/if}
   {:else}
     <p class="muted">Select a route or element, here or in the viewport.</p>
   {/if}
@@ -263,5 +321,13 @@
 
   .via.picked {
     border-left-color: var(--accent);
+  }
+
+  .row.place {
+    grid-template-columns: minmax(0, 1fr) 70px auto auto;
+  }
+
+  .failure {
+    color: var(--bad);
   }
 </style>

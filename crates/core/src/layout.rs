@@ -30,15 +30,18 @@ pub struct RouteLayout {
     pub length_mm: f64,
 }
 
+/// A piece of centreline starting `s0_mm` along its route.
 #[derive(Clone, Debug, PartialEq, Serialize, JsonSchema)]
 #[serde(tag = "kind", rename_all = "snake_case")]
 pub enum PieceLayout {
     Straight {
+        s0_mm: f64,
         from: Vec3,
         to: Vec3,
     },
     /// Constant-radius arc from `from` to `to` about `centre`.
     Arc {
+        s0_mm: f64,
         from: Vec3,
         to: Vec3,
         centre: Vec3,
@@ -88,11 +91,13 @@ pub fn layout(project: &Project) -> Result<Layout> {
                 .pieces
                 .iter()
                 .map(|piece| match piece {
-                    Piece::Straight { from, to, .. } => PieceLayout::Straight {
+                    Piece::Straight { s0, from, to, .. } => PieceLayout::Straight {
+                        s0_mm: s0 * 1e3,
                         from: mm(*from),
                         to: mm(*to),
                     },
                     Piece::Arc {
+                        s0,
                         angle,
                         radius,
                         vertex,
@@ -105,6 +110,7 @@ pub fn layout(project: &Project) -> Result<Layout> {
                         let from = sub(p, scale(d_in, t));
                         let inward = unit(sub(d_out, scale(d_in, dot(d_in, d_out))));
                         PieceLayout::Arc {
+                            s0_mm: s0 * 1e3,
                             from: mm(from),
                             to: mm(add(p, scale(d_out, t))),
                             centre: mm(add(from, scale(inward, *radius))),

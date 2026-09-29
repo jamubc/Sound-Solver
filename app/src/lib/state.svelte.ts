@@ -7,7 +7,8 @@ import type { Project } from './types/project';
 
 export type Selection =
   | { kind: 'element'; id: string }
-  | { kind: 'route'; id: string }
+  /** A route, and where along its centreline it was picked, mm. */
+  | { kind: 'route'; id: string; s_mm?: number }
   /** A via point of a route (index into `via_mm`). */
   | { kind: 'vertex'; route: string; index: number };
 
@@ -109,6 +110,12 @@ export function edit(change: (project: Project) => void) {
   solveRun++;
   app.timeDomain = idle();
   refresh();
+}
+
+/** Replaces the project with a structurally edited one (an element placed or removed). */
+export function commit(project: Project, selection: Selection | null) {
+  edit(() => (app.project = project));
+  app.selection = selection;
 }
 
 export async function solveTimeDomain() {

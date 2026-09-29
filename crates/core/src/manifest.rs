@@ -7,6 +7,10 @@ use std::sync::LazyLock;
 use schemars::JsonSchema;
 use serde::{Deserialize, Serialize};
 
+use crate::error::{Error, Result};
+use crate::geometry::Vec3;
+use crate::project::Element;
+
 #[derive(Clone, Debug, PartialEq, Serialize, Deserialize, JsonSchema)]
 #[serde(deny_unknown_fields)]
 pub struct Manifest {
@@ -79,6 +83,28 @@ pub fn all() -> &'static [Manifest] {
 /// The manifest of element type `kind`.
 pub fn get(kind: &str) -> Option<&'static Manifest> {
     all().iter().find(|m| m.kind == kind)
+}
+
+/// A new element of type `kind` with its manifest's defaults, made of `material` where it has
+/// a material of its own.
+pub fn element(
+    kind: &str,
+    id: &str,
+    position_mm: Vec3,
+    axis: Vec3,
+    material: &str,
+) -> Result<Element> {
+    let m = get(kind).ok_or_else(|| Error::invalid(format!("unknown element type '{kind}'")))?;
+    let mut value =
+        serde_json::json!({ "id": id, "type": kind, "position_mm": position_mm, "axis": axis });
+    for p in &m.params {
+        match p.kind {
+            ParamKind::Number => value[&p.key] = p.default.into(),
+            ParamKind::Material => value[&p.key] = material.into(),
+            ParamKind::Direction | ParamKind::Offsets => {}
+        }
+    }
+    serde_json::from_value(value).map_err(|e| Error::invalid(format!("'{kind}' defaults: {e}")))
 }
 
 #[cfg(test)]

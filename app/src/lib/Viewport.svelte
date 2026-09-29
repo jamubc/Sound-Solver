@@ -39,6 +39,23 @@
     return mesh;
   }
 
+  /** Arc length along the route of the centreline point nearest `p` on `piece`, mm. */
+  function along(piece: PieceLayout, p: THREE.Vector3): number {
+    if (piece.kind === 'straight') {
+      const a = v3(piece.from);
+      const d = v3(piece.to).sub(a);
+      const len = d.length();
+      return piece.s0_mm + Math.min(len, Math.max(0, p.clone().sub(a).dot(d.normalize())));
+    }
+    const c = v3(piece.centre);
+    const u = v3(piece.from).sub(c).normalize();
+    const w = v3(piece.to).sub(c);
+    const v = w.clone().sub(u.clone().multiplyScalar(u.dot(w))).normalize();
+    const q = p.clone().sub(c);
+    const angle = Math.min(Math.max(Math.atan2(q.dot(v), q.dot(u)), 0), (piece.angle_deg * Math.PI) / 180);
+    return piece.s0_mm + piece.radius_mm * angle;
+  }
+
   /** Points along a centreline piece (arcs every ~5°). */
   function samples(piece: PieceLayout): THREE.Vector3[] {
     if (piece.kind === 'straight') return [v3(piece.from), v3(piece.to)];
@@ -84,6 +101,7 @@
             ? frustum(pts[0], pts[1], r.od_mm, r.od_mm, material)
             : new THREE.Mesh(new THREE.TubeGeometry(new THREE.CatmullRomCurve3(pts), pts.length * 2, r.od_mm / 2, 24, false), material);
         mesh.userData.pick = pick;
+        mesh.userData.piece = piece;
         content.add(mesh);
       }
       // The flow solver's x-axis, drawn over the pipe.
@@ -211,7 +229,9 @@
       const ndc = new THREE.Vector2(((e.clientX - rect.left) / rect.width) * 2 - 1, -((e.clientY - rect.top) / rect.height) * 2 + 1);
       raycaster.setFromCamera(ndc, camera);
       const hit = raycaster.intersectObjects(content.children, false).find((h) => h.object.userData.pick);
-      app.selection = (hit?.object.userData.pick as Pick | undefined) ?? null;
+      const pick = hit?.object.userData.pick as Pick | undefined;
+      const piece = hit?.object.userData.piece as PieceLayout | undefined;
+      app.selection = pick?.kind === 'route' && piece ? { ...pick, s_mm: along(piece, hit!.point) } : (pick ?? null);
     });
 
     const observer = new ResizeObserver(resize);
