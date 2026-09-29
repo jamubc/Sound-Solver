@@ -105,6 +105,19 @@ test('recordings give measured order tracks and the cabin transfer function', as
   await page.screenshot({ path: 'test-results/measurements.png' });
 });
 
+test('the inputs are swept and ranked by what they do to the sound', async ({ page }) => {
+  await page.getByRole('tab', { name: 'Accuracy' }).click();
+  const accuracy = page.getByTestId('accuracy');
+  await accuracy.getByTestId('run-sensitivity').click();
+  await expect(accuracy.getByTestId('combined')).toContainText('±');
+  await expect(accuracy.getByTestId('improve')).toContainText('system.elements.muffler');
+  await page.getByRole('tab', { name: 'Listen' }).click();
+  await page.getByTestId('source-render').check();
+  await page.getByTestId('play').click();
+  await expect(page.getByTestId('uncertainty')).toContainText('uncertainty from the inputs at 2100 rpm');
+  await page.screenshot({ path: 'test-results/accuracy.png' });
+});
+
 test('the benchmarks run on demand and verify each subsystem', async ({ page }) => {
   await page.getByRole('tab', { name: 'Measure', exact: true }).click();
   const verification = page.getByTestId('verification');

@@ -14,9 +14,11 @@
 
 use std::path::{Path, PathBuf};
 use std::process::Command;
+use std::sync::atomic::{AtomicBool, AtomicUsize, Ordering};
 
 use exhaust_core::project::Project;
 use exhaust_core::render::{RenderInfo, RenderProgress, Scene, render};
+use exhaust_core::sensitivity::{Sensitivity, sensitivity};
 use exhaust_core::solve::{CycleProgress, PointOutcome, solve_point_with};
 use serde::{Deserialize, Serialize};
 
@@ -28,6 +30,8 @@ pub enum Job {
     Point { project: Box<Project>, rpm: f64 },
     /// A scene marched by the time-domain solver.
     Render { project: Box<Project>, scene: Scene },
+    /// Every estimated or derived input swept across its range at one engine speed.
+    Sensitivity { project: Box<Project>, rpm: f64 },
     /// A program in a container image (the offline field solvers).
     Container(ContainerJob),
 }
@@ -55,6 +59,7 @@ pub enum Output {
         /// Pressure of each listener channel, Pa.
         channels: Vec<Vec<f32>>,
     },
+    Sensitivity(Box<Sensitivity>),
     /// Output files: name and contents.
     Files(Vec<(String, Vec<u8>)>),
 }
@@ -64,6 +69,8 @@ pub enum Output {
 pub enum Progress {
     Cycle(CycleProgress),
     Render(RenderProgress),
+    /// Runs done of runs in all.
+    Runs(usize, usize),
 }
 
 /// Stopped by its progress callback: nothing to cache or report.
@@ -82,6 +89,13 @@ impl Job {
                 exhaust_core::SOURCE,
                 project.hash(),
                 serde_json::to_string(scene).expect("scenes serialise")
+            ),
+            // Unlike a solve, the sweep depends on the input records.
+            Job::Sensitivity { project, rpm } => format!(
+                "sensitivity|{}|{}|{}|{rpm}",
+                exhaust_core::SOURCE,
+                project.hash(),
+                serde_json::to_string(&project.inputs).expect("records serialise")
             ),
             Job::Container(c) => {
                 let mut h = blake3::Hasher::new();
@@ -113,6 +127,10 @@ impl Job {
                 let samples =
                     (scene.duration_s.max(0.0) * exhaust_core::render::SAMPLE_RATE) as u64;
                 NETWORK + samples * 8 * (8 + 8 + 4)
+            }
+            // One network per worker thread.
+            Job::Sensitivity { .. } => {
+                NETWORK * std::thread::available_parallelism().map_or(1, |n| n.get()) as u64
             }
             Job::Container(c) => c.memory_bytes,
         }
@@ -187,6 +205,39 @@ impl Backend for Local {
                         info: Box::new(r.info),
                         channels: r.channels,
                     }),
+                }
+            }
+            Job::Sensitivity { project, rpm } => {
+                // The sweep reports from its worker threads; `progress` stays on this one.
+                let (done, total, stop) = (
+                    AtomicUsize::new(0),
+                    AtomicUsize::new(1),
+                    AtomicBool::new(false),
+                );
+                let result = std::thread::scope(|s| {
+                    let sweep = s.spawn(|| {
+                        sensitivity(project, *rpm, &|d, t| {
+                            done.fetch_max(d, Ordering::Relaxed);
+                            total.store(t, Ordering::Relaxed);
+                            !stop.load(Ordering::Relaxed)
+                        })
+                    });
+                    while !sweep.is_finished() {
+                        std::thread::sleep(std::time::Duration::from_millis(100));
+                        let p = Progress::Runs(
+                            done.load(Ordering::Relaxed),
+                            total.load(Ordering::Relaxed),
+                        );
+                        if !progress(p) {
+                            stop.store(true, Ordering::Relaxed);
+                        }
+                    }
+                    sweep.join().expect("the sweep does not panic")
+                });
+                match result {
+                    Err(_) if stop.load(Ordering::Relaxed) => Err(STOPPED.into()),
+                    Err(e) => Err(e.to_string()),
+                    Ok(r) => Ok(Output::Sensitivity(Box::new(r))),
                 }
             }
             Job::Container(c) => run_container(c),
@@ -284,6 +335,9 @@ enum Stored {
     Point {
         outcome: PointOutcome,
     },
+    Sensitivity {
+        result: Box<Sensitivity>,
+    },
     Render {
         info: serde_json::Value,
         channels: usize,
@@ -305,6 +359,7 @@ impl Cache {
             serde_json::from_slice(&std::fs::read(dir.join("result.json")).ok()?).ok()?;
         Some(match stored {
             Stored::Point { outcome } => Output::Point(outcome),
+            Stored::Sensitivity { result } => Output::Sensitivity(result),
             Stored::Render {
                 info,
                 channels,
@@ -343,6 +398,9 @@ impl Cache {
         let stored = match output {
             Output::Point(outcome) => Stored::Point {
                 outcome: outcome.clone(),
+            },
+            Output::Sensitivity(result) => Stored::Sensitivity {
+                result: result.clone(),
             },
             Output::Render { info, channels } => {
                 let samples = channels.first().map_or(0, Vec::len);
@@ -465,17 +523,26 @@ mod tests {
         let _ = std::fs::remove_dir_all(&dir);
     }
 
-    /// A stopped job fails and leaves nothing in the cache.
+    /// A stopped job fails and leaves nothing in the cache, a point or a sweep whose progress
+    /// comes from other threads.
     #[test]
     fn a_stopped_job_is_not_cached() {
         let dir = scratch("stopped");
         let runner = Runner::local(&dir);
-        let job = Job::Point {
-            project: Box::new(Project::from_json(STRAIGHT_PIPE).unwrap()),
-            rpm: 3000.0,
-        };
-        assert_eq!(runner.run(&job, &mut |_| false), Err(STOPPED.to_string()));
-        assert!(runner.cache.get(&job.key()).is_none());
+        let project = Box::new(Project::from_json(STRAIGHT_PIPE).unwrap());
+        for job in [
+            Job::Point {
+                project: project.clone(),
+                rpm: 3000.0,
+            },
+            Job::Sensitivity {
+                project,
+                rpm: 3000.0,
+            },
+        ] {
+            assert_eq!(runner.run(&job, &mut |_| false), Err(STOPPED.to_string()));
+            assert!(runner.cache.get(&job.key()).is_none());
+        }
         let _ = std::fs::remove_dir_all(&dir);
     }
 

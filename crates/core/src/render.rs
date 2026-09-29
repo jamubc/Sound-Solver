@@ -620,6 +620,70 @@ fn band_levels(s: &Settled, rpm: f64) -> Vec<Vec<Option<f64>>> {
         .collect()
 }
 
+/// The model's limits, Hz, with the duct or outlet that sets each: cross-mode cut-on, 8 cells
+/// per wavelength, outlet ka = 0.5 (ambient k). `c_min` and `mach_max` per duct.
+pub(crate) struct Limits {
+    pub mode: (f64, usize),
+    pub grid: (f64, usize),
+    pub radiation: (f64, usize),
+}
+
+impl Limits {
+    pub(crate) fn new(st: &Settled, c_min: &[f64], mach_max: &[f64], c0: f64) -> Self {
+        let ducts = &st.sim.net.ducts;
+        let lowest = |f: &dyn Fn(usize) -> f64| {
+            (0..ducts.len())
+                .map(|d| (f(d), d))
+                .fold((f64::INFINITY, 0), |a, b| if b.0 < a.0 { b } else { a })
+        };
+        let rad = st
+            .model
+            .outlets
+            .iter()
+            .map(|o| {
+                let a = (o.area / std::f64::consts::PI).sqrt();
+                KA_MONOPOLE * c0 / (2.0 * std::f64::consts::PI * a)
+            })
+            .enumerate()
+            .fold(
+                (f64::INFINITY, 0),
+                |a, (i, f)| if f < a.0 { (f, i) } else { a },
+            );
+        Self {
+            mode: lowest(&|d| {
+                J1P_ROOT * c_min[d] * (1.0 - mach_max[d].powi(2)).max(0.0).sqrt()
+                    / (std::f64::consts::PI * ducts[d].section_diameter)
+            }),
+            grid: lowest(&|d| c_min[d] / (CELLS_PER_WAVELENGTH * ducts[d].dx)),
+            radiation: rad,
+        }
+    }
+
+    /// The limits of a settled state as it stands.
+    pub(crate) fn of_state(st: &Settled, c0: f64) -> Self {
+        let (c, m): (Vec<f64>, Vec<f64>) = st
+            .sim
+            .net
+            .ducts
+            .iter()
+            .enumerate()
+            .map(|(d, duct)| {
+                (0..duct.n())
+                    .map(|i| st.sim.prim(d, i))
+                    .fold((f64::INFINITY, 0.0f64), |(c, m), p| {
+                        (c.min(p.c), m.max(p.u.abs() / p.c))
+                    })
+            })
+            .unzip();
+        Self::new(st, &c, &m, c0)
+    }
+
+    /// The lowest of the three, Hz.
+    pub(crate) fn lowest(&self) -> f64 {
+        self.mode.0.min(self.grid.0).min(self.radiation.0)
+    }
+}
+
 fn band_status(
     st: &Settled,
     c_min: &[f64],
@@ -629,29 +693,9 @@ fn band_status(
     rpm_f: f64,
 ) -> Vec<Band> {
     let ducts = &st.sim.net.ducts;
-    let lowest = |f: &dyn Fn(usize) -> f64| {
-        (0..ducts.len())
-            .map(|d| (f(d), d))
-            .fold((f64::INFINITY, 0), |a, b| if b.0 < a.0 { b } else { a })
-    };
-    let (f_mode, d_mode) = lowest(&|d| {
-        J1P_ROOT * c_min[d] * (1.0 - mach_max[d].powi(2)).max(0.0).sqrt()
-            / (std::f64::consts::PI * ducts[d].section_diameter)
-    });
-    let (f_grid, d_grid) = lowest(&|d| c_min[d] / (CELLS_PER_WAVELENGTH * ducts[d].dx));
-    let (f_rad, o_rad) = st
-        .model
-        .outlets
-        .iter()
-        .map(|o| {
-            let a = (o.area / std::f64::consts::PI).sqrt();
-            KA_MONOPOLE * c0 / (2.0 * std::f64::consts::PI * a)
-        })
-        .enumerate()
-        .fold(
-            (f64::INFINITY, 0),
-            |a, (i, f)| if f < a.0 { (f, i) } else { a },
-        );
+    let limits = Limits::new(st, c_min, mach_max, c0);
+    let ((f_mode, d_mode), (f_grid, d_grid), (f_rad, o_rad)) =
+        (limits.mode, limits.grid, limits.radiation);
     third_octaves()
         .into_iter()
         .enumerate()

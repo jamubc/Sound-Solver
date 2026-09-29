@@ -189,6 +189,18 @@ enum Command {
         #[arg(long)]
         background: Option<PathBuf>,
     },
+    /// Sweep every estimated or derived input across its range at one engine speed: the change
+    /// in each receiver ⅓-octave band per input, ranked, and the combined band (JSON).
+    Sensitivity {
+        /// Project file (JSON).
+        project: PathBuf,
+        /// Engine speed, rpm.
+        #[arg(long)]
+        rpm: f64,
+        /// Write the result here instead of standard output.
+        #[arg(long, short)]
+        out: Option<PathBuf>,
+    },
     /// Run the analytic validation suite; exits non-zero if any check fails.
     Validate {
         /// Print the checks as JSON instead of a table.
@@ -561,6 +573,17 @@ fn run(cli: Cli) -> Result<ExitCode, String> {
                 },
                 None,
             )?;
+            Ok(ExitCode::SUCCESS)
+        }
+        Command::Sensitivity { project, rpm, out } => {
+            let project = read_project(&project)?;
+            let result = exhaust_core::sensitivity::sensitivity(&project, rpm, &|done, total| {
+                eprint!("\r{done}/{total} runs");
+                true
+            })
+            .map_err(|e| e.to_string())?;
+            eprintln!();
+            emit(&result, out)?;
             Ok(ExitCode::SUCCESS)
         }
         Command::Validate { json, cases: only } => {

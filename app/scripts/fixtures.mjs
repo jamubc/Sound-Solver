@@ -31,6 +31,7 @@ cli('solve', project, '--sweep', '2000:3000:500', '-o', out('solve'));
 // Half a second at 3000 rpm heard at the receiver: its provenance (the mock plays a tone).
 writeFileSync('tests/fixtures/scene.json', JSON.stringify({ duration_s: 0.5, rpm: [[0, 3000]], listener: { kind: 'receiver' } }));
 cli('render', project, '--scene', 'app/tests/fixtures/scene.json', '-o', join(tmpdir(), 'render.wav'), '--info', out('render'));
+cli('sensitivity', project, '--rpm', '2100', '-o', out('sensitivity'));
 
 // The reference project with a stub on the mid-pipe, to tune and to compare against.
 const stub = JSON.parse(readFileSync(`../${project}`, 'utf8'));

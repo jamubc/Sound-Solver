@@ -16,6 +16,7 @@ import type {
   RenderInfo,
   RenderProgress,
   Scene,
+  Sensitivity,
   SweepResult,
   Tuning,
 } from './types/api';
@@ -157,6 +158,13 @@ export const backend = {
     };
     return { comparison, measured: clip(), predicted: clip() };
   },
+  /** Every estimated or derived input swept across its range at `rpm`; `cancelSensitivity` stops it. */
+  sensitivity(project: Project, rpm: number, onProgress: (done: number, total: number) => void) {
+    const progress = new Channel<[number, number]>();
+    progress.onmessage = ([done, total]) => onProgress(done, total);
+    return invoke<Sensitivity>('sensitivity', { project, rpm, onProgress: progress });
+  },
+  cancelSensitivity: () => invoke<void>('cancel_sensitivity'),
   /** The analytic verification suite, each case as it finishes. */
   verify(onCase: (report: CaseReport) => void) {
     const cases = new Channel<CaseReport>();

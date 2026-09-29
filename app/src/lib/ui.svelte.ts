@@ -16,6 +16,7 @@ export const WORKSPACES: [Workspace, string][] = [
 export const RESULTS: [string, string][] = [
   ['overview', 'Drone & compare'],
   ['listen', 'Listen'],
+  ['accuracy', 'Accuracy'],
   ['spectrum', 'Spectrum'],
   ['orders', 'Orders'],
   ['level', 'Level'],

@@ -20,6 +20,7 @@ use exhaust_core::metrics::{Metrics, OrderDifference};
 use exhaust_core::project::{CabinTf, CabinTfMethod, Project};
 use exhaust_core::render::{RenderProgress, Scene};
 use exhaust_core::scan::{self, Clearance, Mesh};
+use exhaust_core::sensitivity::Sensitivity;
 use exhaust_core::solve::{self, CycleProgress, Line, PointOutcome, SolverKind, SweepResult};
 use exhaust_core::tune::{self, Tuning};
 use exhaust_core::validation::{self, CaseReport};
@@ -37,6 +38,8 @@ const STOCK_W205: &str = include_str!("../../../tests/cases/w205_stock.json");
 static GENERATION: AtomicU64 = AtomicU64::new(0);
 /// Bumped by every render and by `cancel_render`; a render stops once it is stale.
 static RENDER: AtomicU64 = AtomicU64::new(0);
+/// Bumped by every sensitivity sweep and by `cancel_sensitivity`.
+static SENSITIVITY: AtomicU64 = AtomicU64::new(0);
 
 fn parse(project: &Value) -> Result<Project, String> {
     Project::from_json(&project.to_string()).map_err(|e| e.to_string())
@@ -472,6 +475,44 @@ async fn validate_hold(
     .await
 }
 
+/// Sweeps every estimated or derived input across its range at `rpm`
+/// (`sensitivity::sensitivity`) through the job runner, streaming runs done and runs in all.
+/// A newer sweep or `cancel_sensitivity` stops it.
+#[tauri::command]
+async fn sensitivity(
+    app: AppHandle,
+    project: Value,
+    rpm: f64,
+    on_progress: Channel<[usize; 2]>,
+) -> Result<Sensitivity, String> {
+    let project = parse(&project)?;
+    let runner = runner(&app)?;
+    let generation = SENSITIVITY.fetch_add(1, Ordering::SeqCst) + 1;
+    blocking(move || {
+        let job = Job::Sensitivity {
+            project: Box::new(project),
+            rpm,
+        };
+        let out = runner.run(&job, &mut |p| {
+            if let Progress::Runs(done, total) = p {
+                let _ = on_progress.send([done, total]);
+            }
+            SENSITIVITY.load(Ordering::SeqCst) == generation
+        })?;
+        match out {
+            Output::Sensitivity(s) => Ok(*s),
+            _ => Err("a sensitivity job made no sweep".into()),
+        }
+    })
+    .await
+}
+
+/// Stops the running sensitivity sweep.
+#[tauri::command]
+fn cancel_sensitivity() {
+    SENSITIVITY.fetch_add(1, Ordering::SeqCst);
+}
+
 /// Runs the analytic verification suite, sending each case as it finishes.
 #[tauri::command]
 async fn verify(on_case: Channel<CaseReport>) -> Result<Vec<CaseReport>, String> {
@@ -655,7 +696,9 @@ pub fn run() {
             render,
             cancel_render,
             validate_hold,
-            verify
+            verify,
+            sensitivity,
+            cancel_sensitivity
         ])
         .run(tauri::generate_context!())
         .expect("error while running the app");

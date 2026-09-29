@@ -196,10 +196,10 @@
     },
     "gas.lambda": {
       "provenance": "estimated",
-      "source": "engineering reasoning: a three-way-catalyst engine holds λ = 1 at cruise; full-load enrichment is outside this operating point",
+      "source": "engineering reasoning: a three-way-catalyst engine dithers about λ = 1 by about ±2 % at cruise; the model takes λ ≥ 1 (rich products are not modelled), so the lean half is swept",
       "uncertainty": {
         "kind": "range",
-        "low": 0.98,
+        "low": 1.0,
         "high": 1.02
       }
     },

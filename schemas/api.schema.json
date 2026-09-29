@@ -44,6 +44,9 @@
     "scene": {
       "$ref": "#/$defs/Scene"
     },
+    "sensitivity": {
+      "$ref": "#/$defs/Sensitivity"
+    },
     "sweep": {
       "$ref": "#/$defs/SweepResult"
     },
@@ -75,7 +78,8 @@
     "render",
     "render_progress",
     "hold",
-    "verification"
+    "verification",
+    "sensitivity"
   ],
   "$defs": {
     "Band": {
@@ -570,6 +574,87 @@
         "rpm_spread",
         "rpm_estimated",
         "bands"
+      ]
+    },
+    "InputEffect": {
+      "type": "object",
+      "properties": {
+        "default_range": {
+          "type": "boolean"
+        },
+        "ends": {
+          "description": "The ends swept: values for a number, scale factors otherwise.",
+          "type": "array",
+          "items": {
+            "type": "number",
+            "format": "double"
+          },
+          "maxItems": 2,
+          "minItems": 2
+        },
+        "error": {
+          "description": "Neither end could be built: the input is outside the band.",
+          "type": [
+            "string",
+            "null"
+          ]
+        },
+        "high_db": {
+          "type": "array",
+          "items": {
+            "type": [
+              "number",
+              "null"
+            ],
+            "format": "double"
+          }
+        },
+        "impact_db": {
+          "description": "Largest change in the resolved bands within 40 dB of the loudest, dB.",
+          "type": "number",
+          "format": "double"
+        },
+        "low_db": {
+          "description": "Level change at the low and the high end, per band, dB.",
+          "type": "array",
+          "items": {
+            "type": [
+              "number",
+              "null"
+            ],
+            "format": "double"
+          }
+        },
+        "note": {
+          "description": "One end could not be built: why, the other end standing for both.",
+          "type": [
+            "string",
+            "null"
+          ]
+        },
+        "path": {
+          "type": "string"
+        },
+        "provenance": {
+          "$ref": "#/$defs/Provenance2"
+        },
+        "range": {
+          "$ref": "#/$defs/Uncertainty"
+        },
+        "scaled": {
+          "type": "boolean"
+        }
+      },
+      "required": [
+        "path",
+        "provenance",
+        "range",
+        "default_range",
+        "ends",
+        "scaled",
+        "low_db",
+        "high_db",
+        "impact_db"
       ]
     },
     "InputUse": {
@@ -2142,6 +2227,65 @@
         "duration_s",
         "rpm",
         "listener"
+      ]
+    },
+    "Sensitivity": {
+      "type": "object",
+      "properties": {
+        "bands_hz": {
+          "description": "⅓-octave band centres, Hz.",
+          "type": "array",
+          "items": {
+            "type": "number",
+            "format": "double"
+          }
+        },
+        "base_db": {
+          "description": "Receiver level with every input as recorded, dB re 20 µPa; `None` above the samples'\nNyquist frequency or where nothing sounds.",
+          "type": "array",
+          "items": {
+            "type": [
+              "number",
+              "null"
+            ],
+            "format": "double"
+          }
+        },
+        "combined_db": {
+          "description": "Root-sum-square over the inputs of each one's larger change, dB.",
+          "type": "array",
+          "items": {
+            "type": [
+              "number",
+              "null"
+            ],
+            "format": "double"
+          }
+        },
+        "inputs": {
+          "description": "Inputs on their class's default range first, then by impact.",
+          "type": "array",
+          "items": {
+            "$ref": "#/$defs/InputEffect"
+          }
+        },
+        "limit_hz": {
+          "description": "Bands above this frequency, Hz, are beyond the model (`render::Limits`); impacts are\ntaken below it.",
+          "type": "number",
+          "format": "double"
+        },
+        "rpm": {
+          "type": "number",
+          "format": "double"
+        }
+      },
+      "required": [
+        "rpm",
+        "bands_hz",
+        "base_db",
+        "combined_db",
+        "limit_hz",
+        "inputs"
       ]
     },
     "SolverKind": {

@@ -80,6 +80,22 @@
   );
   const hz = (f: number) => (f >= 1000 ? `${+(f / 1000).toFixed(f >= 10000 ? 0 : 1)} k` : `${Math.round(f)}`);
 
+  // The inputs' combined uncertainty, when a sweep of this project exists: at the firing order
+  // and the largest in the bands the model resolves.
+  const uncertainty = $derived.by(() => {
+    const s = app.sensitivity;
+    if (!s || !app.project || s.project !== JSON.stringify(app.project)) return null;
+    const r = s.result;
+    const firingHz = ((app.project.engine.geometry.firing_order.length / 2) * r.rpm) / 60;
+    const band = r.bands_hz.findIndex((c) => firingHz >= c * 10 ** -0.05 && firingHz < c * 10 ** 0.05);
+    const loud = Math.max(...r.base_db.filter((v): v is number => v !== null && v !== undefined));
+    const resolved = r.combined_db.filter(
+      (v, b): v is number =>
+        v !== null && v !== undefined && r.bands_hz[b] * 10 ** 0.05 <= r.limit_hz && (r.base_db[b] ?? -Infinity) > loud - 40,
+    );
+    return { rpm: r.rpm, firing: r.combined_db[band] ?? null, worst: Math.max(0, ...resolved), limit: r.limit_hz };
+  });
+
   const button = (which: Which) => (player.playing === which ? stop() : play(which));
 </script>
 
@@ -215,6 +231,15 @@
           {#each reasons as r}<li>{r}</li>{/each}
           {#each info.warnings as w}<li>{w}</li>{/each}
         </ul>
+        {#if uncertainty}
+          <p class="note mono" data-testid="uncertainty">
+            uncertainty from the inputs at {Math.round(uncertainty.rpm)} rpm: ±{uncertainty.firing?.toFixed(1) ?? '—'} dB at the
+            firing order, up to ±{uncertainty.worst.toFixed(1)} dB in the bands below {Math.round(uncertainty.limit)} Hz within 40 dB of the
+            loudest (Accuracy tab)
+          </p>
+        {:else}
+          <p class="note muted">Sweep the inputs in the Accuracy tab for this render's uncertainty band.</p>
+        {/if}
         <details class="note" data-testid="render-inputs">
           <summary>
             estimated inputs: {info.estimated}{info.default_ranges ? `, ${info.default_ranges} on their class's default range` : ''}

@@ -10,6 +10,7 @@ use exhaust_core::metrics::OrderDifference;
 use exhaust_core::project::Project;
 use exhaust_core::render::{RenderInfo, RenderProgress, Scene};
 use exhaust_core::scan::Clearance;
+use exhaust_core::sensitivity::Sensitivity;
 use exhaust_core::solve::{CycleProgress, PointOutcome, SweepResult};
 use exhaust_core::tune::Tuning;
 use exhaust_core::validation::CaseReport;
@@ -35,6 +36,7 @@ struct Api {
     render_progress: RenderProgress,
     hold: HoldComparison,
     verification: Vec<CaseReport>,
+    sensitivity: Sensitivity,
 }
 
 fn check(file: &str, schema: Schema) {

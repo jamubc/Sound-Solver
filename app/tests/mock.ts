@@ -20,6 +20,7 @@ export async function mockBackend(page: Page, project: 'project' | 'project-stub
     cabinTf: fixture('cabin-tf'),
     compare: fixture('compare'),
     render: fixture('render') as { render: unknown },
+    sensitivity: fixture('sensitivity'),
   };
   await page.addInitScript((a) => {
     const callbacks = new Map<number, (message: unknown) => void>();
@@ -85,6 +86,12 @@ export async function mockBackend(page: Page, project: 'project' | 'project-stub
         return bytes;
       },
       cancel_render: () => null,
+      sensitivity: (args) => {
+        const progress = callbacks.get((args.onProgress as { id: number }).id)!;
+        progress({ index: 0, message: [1, 57] });
+        progress({ index: 1, end: true });
+        return a.sensitivity;
+      },
       // Two benchmark cases, sent as they finish.
       verify: (args) => {
         const send = callbacks.get((args.onCase as { id: number }).id)!;

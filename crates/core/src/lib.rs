@@ -22,6 +22,7 @@ pub mod project;
 pub mod radiation;
 pub mod render;
 pub mod scan;
+pub mod sensitivity;
 pub mod solid;
 pub mod solve;
 pub mod spectrum;

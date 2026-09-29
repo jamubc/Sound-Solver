@@ -265,6 +265,7 @@ export interface Api {
   render: RenderInfo;
   render_progress: RenderProgress;
   scene: Scene;
+  sensitivity: Sensitivity;
   sweep: SweepResult;
   tracks: OrderTracks;
   tuning: Tuning;
@@ -909,6 +910,70 @@ export interface StartState {
   map_kpa: number;
   periodicity_residual: number;
   rpm: number;
+}
+/**
+ * This interface was referenced by `Api`'s JSON-Schema
+ * via the `definition` "Sensitivity".
+ */
+export interface Sensitivity {
+  /**
+   * ⅓-octave band centres, Hz.
+   */
+  bands_hz: number[];
+  /**
+   * Receiver level with every input as recorded, dB re 20 µPa; `None` above the samples'
+   * Nyquist frequency or where nothing sounds.
+   */
+  base_db: (number | null)[];
+  /**
+   * Root-sum-square over the inputs of each one's larger change, dB.
+   */
+  combined_db: (number | null)[];
+  /**
+   * Inputs on their class's default range first, then by impact.
+   */
+  inputs: InputEffect[];
+  /**
+   * Bands above this frequency, Hz, are beyond the model (`render::Limits`); impacts are
+   * taken below it.
+   */
+  limit_hz: number;
+  rpm: number;
+}
+/**
+ * This interface was referenced by `Api`'s JSON-Schema
+ * via the `definition` "InputEffect".
+ */
+export interface InputEffect {
+  default_range: boolean;
+  /**
+   * The ends swept: values for a number, scale factors otherwise.
+   *
+   * @minItems 2
+   * @maxItems 2
+   */
+  ends: [number, number];
+  /**
+   * Neither end could be built: the input is outside the band.
+   */
+  error?: string | null;
+  high_db: (number | null)[];
+  /**
+   * Largest change in the resolved bands within 40 dB of the loudest, dB.
+   */
+  impact_db: number;
+  /**
+   * Level change at the low and the high end, per band, dB.
+   */
+  low_db: (number | null)[];
+  /**
+   * One end could not be built: why, the other end standing for both.
+   */
+  note?: string | null;
+  path: string;
+  provenance: Provenance2;
+  range: Uncertainty;
+  scaled: boolean;
 }
 /**
  * This interface was referenced by `Api`'s JSON-Schema

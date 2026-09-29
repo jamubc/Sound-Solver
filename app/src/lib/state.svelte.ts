@@ -2,7 +2,7 @@
 // backend re-validates and lays it out, and the four-pole preview reruns. Time-domain results
 // belong to the project they were solved for, so an edit clears them.
 import { backend, type ScanMesh } from './backend';
-import type { Clearance, CycleProgress, Layout, Manifest, PointOutcome, PointResult, SweepResult } from './types/api';
+import type { Clearance, CycleProgress, Layout, Manifest, PointOutcome, PointResult, Sensitivity, SweepResult } from './types/api';
 import type { Project } from './types/project';
 
 export type Selection =
@@ -69,6 +69,8 @@ export const app = $state({
   /** The scan reference point (0–2) the next click on the scan sets. */
   picking: null as number | null,
   baseline: null as Baseline | null,
+  /** The last sensitivity sweep and the project it was made from (JSON), stale once that differs. */
+  sensitivity: null as { result: Sensitivity; project: string } | null,
   /** Show lengths in inches rather than millimetres. */
   inches: false,
   /** Edits that `undo` and `redo` can step through. */

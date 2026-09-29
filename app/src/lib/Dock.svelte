@@ -1,4 +1,5 @@
 <script lang="ts">
+  import Accuracy from './Accuracy.svelte';
   import Compare from './Compare.svelte';
   import DroneReport from './DroneReport.svelte';
   import Fabrication from './Fabrication.svelte';
@@ -48,6 +49,8 @@
         </div>
       {:else if ui.dock === 'listen'}
         <Listen />
+      {:else if ui.dock === 'accuracy'}
+        <Accuracy />
       {:else if ui.dock === 'measure'}
         <Measurements />
       {:else if ui.dock === 'fabricate'}
