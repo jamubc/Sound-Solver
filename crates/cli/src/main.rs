@@ -290,7 +290,8 @@ fn run(cli: Cli) -> Result<ExitCode, String> {
                         method: CabinTfMethod::OrderRatio,
                         source: format!(
                             "order ratio: {} (exterior), {} (interior)",
-                            ext.path, int.path
+                            file_name(Path::new(&ext.path)),
+                            file_name(Path::new(&int.path))
                         ),
                         gain_db,
                     }
@@ -306,8 +307,8 @@ fn run(cli: Cli) -> Result<ExitCode, String> {
                         method: CabinTfMethod::Impulse,
                         source: format!(
                             "impulse: {} (exterior), {} (interior)",
-                            files[0].display(),
-                            files[1].display()
+                            file_name(&files[0]),
+                            file_name(&files[1])
                         ),
                         gain_db: measure::cabin_tf_impulse(&rec(&files[0])?, &rec(&files[1])?)
                             .map_err(|e| e.to_string())?,
@@ -415,6 +416,11 @@ fn read_scan(project_path: &Path, project: &Project) -> Result<Option<Mesh>, Str
     Mesh::parse(&scan.path, &bytes)
         .map(Some)
         .map_err(|e| format!("{}: {e}", file.display()))
+}
+
+fn file_name(path: &Path) -> String {
+    path.file_name()
+        .map_or(path.display().to_string(), |n| n.to_string_lossy().into())
 }
 
 /// Order tracks of a recording, its files relative to the project file.

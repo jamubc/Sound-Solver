@@ -1,20 +1,24 @@
 // Stands in for the Tauri backend in a plain browser: every command answers with what the
-// real core returned for the reference project (fixtures from `npm run fixtures`). The file
-// dialog picks a synthetic underbody scan.
+// real core returned for the reference project (fixtures from `npm run fixtures`), or for the
+// fixture `project` names. The file dialog picks a synthetic scan, recording or log.
 import { readFileSync } from 'node:fs';
 import type { Page } from '@playwright/test';
 
 const fixture = (name: string): unknown =>
   JSON.parse(readFileSync(new URL(`./fixtures/${name}.json`, import.meta.url), 'utf8'));
 
-export async function mockBackend(page: Page) {
+export async function mockBackend(page: Page, project: 'project' | 'project-stub' = 'project') {
   const answers = {
-    project: fixture('project'),
-    layout: fixture('layout'),
+    project: fixture(project),
+    layout: fixture(project === 'project' ? 'layout' : 'layout-stub'),
     manifests: fixture('manifests'),
-    preview: fixture('preview'),
+    preview: fixture('preview') as { metrics: unknown },
     fabrication: fixture('fabrication'),
     solve: fixture('solve') as { points: unknown[] },
+    tune: fixture('tune'),
+    tracks: fixture('tracks'),
+    cabinTf: fixture('cabin-tf'),
+    compare: fixture('compare'),
   };
   await page.addInitScript((a) => {
     const callbacks = new Map<number, (message: unknown) => void>();
@@ -32,7 +36,17 @@ export async function mockBackend(page: Page) {
         return a.solve;
       },
       fabrication: () => a.fabrication,
-      'plugin:dialog|open': () => '/scans/floor.stl',
+      'plugin:dialog|open': (args) => {
+        const { filters } = args.options as { filters?: { extensions: string[] }[] };
+        const kinds = filters?.[0]?.extensions ?? [];
+        return kinds.includes('stl') ? '/scans/floor.stl' : kinds.includes('wav') ? '/recordings/run.wav' : '/recordings/obd.csv';
+      },
+      tune: () => a.tune,
+      order_tracks: () => a.tracks,
+      cabin_tf_orders: () => a.cabinTf,
+      cabin_tf_impulse: () => a.cabinTf,
+      evaluate: () => a.preview.metrics,
+      compare: () => a.compare,
       // A flat underbody 200 mm above the flange, in metres: 4 vertices, 2 triangles.
       scan_mesh: () => {
         const v = [-4, -1, 0.2, 1, -1, 0.2, 1, 1, 0.2, -4, 1, 0.2];

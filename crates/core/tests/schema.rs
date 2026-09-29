@@ -5,9 +5,12 @@
 use exhaust_core::fabricate::Package;
 use exhaust_core::layout::Layout;
 use exhaust_core::manifest::Manifest;
+use exhaust_core::measure::OrderTracks;
+use exhaust_core::metrics::OrderDifference;
 use exhaust_core::project::Project;
 use exhaust_core::scan::Clearance;
 use exhaust_core::solve::{PointOutcome, SweepResult};
+use exhaust_core::tune::Tuning;
 use schemars::{JsonSchema, Schema};
 
 /// The app backend's replies, for generating the frontend's types.
@@ -21,6 +24,9 @@ struct Api {
     point: PointOutcome,
     fabrication: Package,
     clearance: Clearance,
+    tuning: Tuning,
+    tracks: OrderTracks,
+    differences: Vec<OrderDifference>,
 }
 
 fn check(file: &str, schema: Schema) {

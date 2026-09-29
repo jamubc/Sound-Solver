@@ -2,6 +2,7 @@
   import { onMount } from 'svelte';
   import { backend } from './lib/backend';
   import Fabrication from './lib/Fabrication.svelte';
+  import Measurements from './lib/Measurements.svelte';
   import Plots from './lib/Plots.svelte';
   import Properties from './lib/Properties.svelte';
   import { app, load } from './lib/state.svelte';
@@ -10,7 +11,8 @@
   import Viewport from './lib/Viewport.svelte';
 
   let unavailable = $state<string | null>(null);
-  let tab = $state<'acoustics' | 'fabrication'>('acoustics');
+  const TABS = { acoustics: 'Acoustics', measurements: 'Measurements', fabrication: 'Fabrication' } as const;
+  let tab = $state<keyof typeof TABS>('acoustics');
 
   onMount(async () => {
     try {
@@ -41,14 +43,16 @@
   </main>
   <section class="plots">
     <div class="tabs" role="tablist">
-      {#each ['acoustics', 'fabrication'] as const as t}
-        <button role="tab" aria-selected={tab === t} class:on={tab === t} onclick={() => (tab = t)}>
-          {t === 'acoustics' ? 'Acoustics' : 'Fabrication'}
+      {#each Object.entries(TABS) as [t, name]}
+        <button role="tab" aria-selected={tab === t} class:on={tab === t} onclick={() => (tab = t as keyof typeof TABS)}>
+          {name}
         </button>
       {/each}
     </div>
     {#if tab === 'acoustics'}
       <Plots />
+    {:else if tab === 'measurements'}
+      <Measurements />
     {:else}
       <Fabrication />
     {/if}

@@ -12,9 +12,12 @@ use std::sync::atomic::{AtomicU64, Ordering};
 use exhaust_core::fabricate::{self, Package};
 use exhaust_core::layout::{Layout, layout};
 use exhaust_core::manifest::{self, Manifest};
-use exhaust_core::project::Project;
+use exhaust_core::measure::{self, OrderTracks, Recording, RpmLog};
+use exhaust_core::metrics::{Metrics, OrderDifference};
+use exhaust_core::project::{CabinTf, CabinTfMethod, Project};
 use exhaust_core::scan::{self, Clearance, Mesh};
 use exhaust_core::solve::{self, PointOutcome, SolverKind, SweepResult};
+use exhaust_core::tune::{self, Tuning};
 use exhaust_core::{edit, metrics};
 use rayon::prelude::*;
 use serde_json::Value;
@@ -127,26 +130,163 @@ async fn clearance(project: Value) -> Result<Clearance, String> {
     .await
 }
 
-/// The app holds the scan path absolute; the file holds it relative to the project file.
+/// Applies `f` to every file path the project holds: scan, recordings, engine-speed logs.
+fn map_paths(project: &mut Project, f: impl Fn(&str) -> String) {
+    let (scan, recordings) = (
+        &mut project.fabrication.scan,
+        &mut project.measurements.recordings,
+    );
+    let paths = scan.iter_mut().map(|s| &mut s.path).chain(
+        recordings
+            .iter_mut()
+            .flat_map(|r| std::iter::once(&mut r.path).chain(r.rpm_log.as_mut())),
+    );
+    for p in paths {
+        *p = f(p);
+    }
+}
+
+/// The app holds file paths absolute; the file holds them relative to itself where it can.
 #[tauri::command]
 fn open_project(path: PathBuf) -> Result<Value, String> {
     let text = std::fs::read_to_string(&path).map_err(|e| format!("{}: {e}", path.display()))?;
     let mut project = Project::from_json(&text).map_err(|e| e.to_string())?;
-    if let Some(scan) = &mut project.fabrication.scan {
-        scan.path = dir(&path).join(&scan.path).display().to_string();
-    }
+    map_paths(&mut project, |p| dir(&path).join(p).display().to_string());
     Ok(to_value(&project))
 }
 
 #[tauri::command]
 fn save_project(path: PathBuf, project: Value) -> Result<(), String> {
     let mut project = parse(&project)?;
-    if let Some(scan) = &mut project.fabrication.scan
-        && let Ok(inside) = Path::new(&scan.path).strip_prefix(dir(&path))
-    {
-        scan.path = inside.display().to_string();
-    }
+    map_paths(&mut project, |p| {
+        Path::new(p)
+            .strip_prefix(dir(&path))
+            .map_or(p.to_string(), |inside| inside.display().to_string())
+    });
     std::fs::write(&path, project.to_json()).map_err(|e| format!("{}: {e}", path.display()))
+}
+
+/// Sizes a stub's length or a Helmholtz resonator's volume onto a drone (`tune::tune`).
+#[tauri::command]
+async fn tune(
+    project: Value,
+    element: String,
+    target_hz: f64,
+    rpm: f64,
+    stated_k: Option<[f64; 2]>,
+) -> Result<Tuning, String> {
+    let project = parse(&project)?;
+    blocking(move || {
+        tune::tune(&project, &element, target_hz, rpm, stated_k).map_err(|e| e.to_string())
+    })
+    .await
+}
+
+fn read_recording(file: &Path) -> Result<Recording, String> {
+    let bytes = std::fs::read(file).map_err(|e| format!("{}: {e}", file.display()))?;
+    Recording::parse(&file.to_string_lossy(), &bytes)
+        .map_err(|e| format!("{}: {e}", file.display()))
+}
+
+fn file_name(path: &str) -> String {
+    Path::new(path)
+        .file_name()
+        .map_or(path.into(), |n| n.to_string_lossy().into())
+}
+
+/// Order tracks of the project's recording `index`.
+fn recording_tracks(project: &Project, index: usize) -> Result<OrderTracks, String> {
+    let spec = project
+        .measurements
+        .recordings
+        .get(index)
+        .ok_or_else(|| format!("the project has no recording {index}"))?;
+    let rec = read_recording(Path::new(&spec.path))?;
+    let log = match &spec.rpm_log {
+        Some(file) => {
+            let text = std::fs::read_to_string(file).map_err(|e| format!("{file}: {e}"))?;
+            Some(RpmLog::parse(&text).map_err(|e| format!("{file}: {e}"))?)
+        }
+        None => None,
+    };
+    measure::order_tracks(
+        project,
+        &rec,
+        log.as_ref(),
+        spec.log_offset_s,
+        spec.calibration_db,
+    )
+    .map_err(|e| e.to_string())
+}
+
+#[tauri::command]
+async fn order_tracks(project: Value, index: usize) -> Result<OrderTracks, String> {
+    let project = parse(&project)?;
+    blocking(move || recording_tracks(&project, index)).await
+}
+
+/// Cabin transfer function by order ratio of two of the project's recordings of one drive.
+#[tauri::command]
+async fn cabin_tf_orders(
+    project: Value,
+    exterior: usize,
+    interior: usize,
+) -> Result<CabinTf, String> {
+    let project = parse(&project)?;
+    blocking(move || {
+        let name = |i: usize| file_name(&project.measurements.recordings[i].path);
+        let gain_db = measure::cabin_tf_orders(
+            &recording_tracks(&project, exterior)?,
+            &recording_tracks(&project, interior)?,
+        )
+        .map_err(|e| e.to_string())?;
+        Ok(CabinTf {
+            method: CabinTfMethod::OrderRatio,
+            source: format!(
+                "order ratio: {} (exterior), {} (interior)",
+                name(exterior),
+                name(interior)
+            ),
+            gain_db,
+        })
+    })
+    .await
+}
+
+/// Cabin transfer function from recordings of the same impulses outside and inside.
+#[tauri::command]
+async fn cabin_tf_impulse(exterior: PathBuf, interior: PathBuf) -> Result<CabinTf, String> {
+    blocking(move || {
+        let gain_db =
+            measure::cabin_tf_impulse(&read_recording(&exterior)?, &read_recording(&interior)?)
+                .map_err(|e| e.to_string())?;
+        Ok(CabinTf {
+            method: CabinTfMethod::Impulse,
+            source: format!(
+                "impulse: {} (exterior), {} (interior)",
+                file_name(&exterior.to_string_lossy()),
+                file_name(&interior.to_string_lossy())
+            ),
+            gain_db,
+        })
+    })
+    .await
+}
+
+/// Sound metrics of solved points under the project's measurements as they are now.
+#[tauri::command]
+fn evaluate(project: Value, points: Vec<PointOutcome>) -> Result<Metrics, String> {
+    Ok(metrics::evaluate(&parse(&project)?, &points))
+}
+
+/// Engine orders of configuration `b` against `a`.
+#[tauri::command]
+fn compare(
+    project: Value,
+    a: Vec<PointOutcome>,
+    b: Vec<PointOutcome>,
+) -> Result<Vec<OrderDifference>, String> {
+    Ok(metrics::compare(&parse(&project)?, &a, &b))
 }
 
 /// Validates the project and lays it out for the viewport.
@@ -272,7 +412,13 @@ pub fn run() {
             fabrication,
             export_package,
             scan_mesh,
-            clearance
+            clearance,
+            tune,
+            order_tracks,
+            cabin_tf_orders,
+            cabin_tf_impulse,
+            evaluate,
+            compare
         ])
         .run(tauri::generate_context!())
         .expect("error while running the app");
@@ -303,7 +449,13 @@ mod tests {
                 fabrication,
                 export_package,
                 scan_mesh,
-                clearance
+                clearance,
+                tune,
+                order_tracks,
+                cabin_tf_orders,
+                cabin_tf_impulse,
+                evaluate,
+                compare
             ])
             .build(mock_context(noop_assets()))
             .expect("app builds");
@@ -386,16 +538,82 @@ mod tests {
         let clearance = call("clearance", json!({ "project": scanned })).expect("clearance");
         assert!(clearance["placement"]["residual_mm"].as_f64().unwrap() < 1e-6);
         assert_eq!(clearance["routes"].as_array().unwrap().len(), 6);
-        // The file holds the scan path relative to itself; the app holds it absolute.
+
+        // Recordings: 4 s of the firing order at 2100 rpm (70 Hz), outside and 20 dB down inside.
+        let wav = |name: &str, gain: f64| {
+            let (fs, n) = (8000u32, 32000u32);
+            let mut b = b"RIFF".to_vec();
+            b.extend((36 + 2 * n).to_le_bytes());
+            b.extend(b"WAVEfmt ");
+            b.extend(16u32.to_le_bytes());
+            b.extend([1u16, 1].iter().flat_map(|x| x.to_le_bytes()));
+            b.extend([fs, 2 * fs].iter().flat_map(|x| x.to_le_bytes()));
+            b.extend([2u16, 16].iter().flat_map(|x| x.to_le_bytes()));
+            b.extend(b"data");
+            b.extend((2 * n).to_le_bytes());
+            for i in 0..n {
+                let s =
+                    gain * 0.3 * (2.0 * std::f64::consts::PI * 70.0 * i as f64 / fs as f64).sin();
+                b.extend(((s * 32767.0) as i16).to_le_bytes());
+            }
+            std::fs::write(dir.join(name), b).unwrap();
+            dir.join(name)
+        };
+        scanned["measurements"] = json!({ "recordings": [
+            { "path": wav("outside.wav", 1.0), "position": "exterior" },
+            { "path": wav("inside.wav", 0.1), "position": "interior" },
+        ]});
+        let tracks =
+            call("order_tracks", json!({ "project": scanned, "index": 0 })).expect("tracks");
+        assert_eq!(tracks["rpm_estimated"], true);
+        let tf = call(
+            "cabin_tf_orders",
+            json!({ "project": scanned, "exterior": 0, "interior": 1 }),
+        )
+        .expect("order ratio");
+        assert_eq!(
+            tf["source"],
+            "order ratio: outside.wav (exterior), inside.wav (interior)"
+        );
+        let tf = call(
+            "cabin_tf_impulse",
+            json!({ "exterior": dir.join("outside.wav"), "interior": dir.join("inside.wav") }),
+        )
+        .expect("impulse");
+        assert_eq!(tf["method"], "impulse");
+        let metrics = call(
+            "evaluate",
+            json!({ "project": scanned, "points": preview["points"] }),
+        )
+        .expect("metrics");
+        assert_eq!(metrics["firing_order"], 2.0);
+        let differences = call(
+            "compare",
+            json!({ "project": project, "a": preview["points"], "b": preview["points"] }),
+        )
+        .expect("differences");
+        assert_eq!(differences[1]["cruise_db"], 0.0);
+        let stub = &inserted["project"];
+        let tuning = call(
+            "tune",
+            json!({ "project": stub, "element": inserted["id"], "targetHz": 150.0, "rpm": 3000.0, "statedK": null }),
+        )
+        .expect("tuning");
+        assert_eq!(tuning["parameter"], "length_mm");
+
+        // The file holds paths relative to itself; the app holds them absolute.
         let path = dir.join("w205.json");
         call("save_project", json!({ "path": path, "project": scanned })).expect("saved");
+        let saved = std::fs::read_to_string(&path).unwrap();
         assert!(
-            std::fs::read_to_string(&path)
-                .unwrap()
-                .contains("\"path\": \"floor.stl\"")
+            saved.contains("\"path\": \"floor.stl\"") && saved.contains("\"path\": \"inside.wav\"")
         );
         let reopened = call("open_project", json!({ "path": path })).expect("reopened");
         assert_eq!(reopened["fabrication"]["scan"]["path"], json!(floor));
+        assert_eq!(
+            reopened["measurements"]["recordings"][1]["path"],
+            json!(dir.join("inside.wav"))
+        );
         let files = call(
             "export_package",
             json!({ "project": scanned, "path": path }),

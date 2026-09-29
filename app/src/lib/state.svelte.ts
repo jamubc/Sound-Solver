@@ -25,6 +25,13 @@ const idle = (): TimeDomain => ({ running: false, points: [], result: null, erro
 /** Colours of the three scan reference points, in the panel and the viewport. */
 export const REFERENCE_COLOURS = ['#4fd1c5', '#ff79c6', '#c792ea'];
 
+/** Results pinned to compare the configuration against. */
+export interface Baseline {
+  name: string;
+  preview: SweepResult | null;
+  timeDomain: SweepResult | null;
+}
+
 export const app = $state({
   project: null as Project | null,
   path: null as string | null,
@@ -47,6 +54,7 @@ export const app = $state({
   clearanceError: null as string | null,
   /** The scan reference point (0–2) the next click on the scan sets. */
   picking: null as number | null,
+  baseline: null as Baseline | null,
 });
 
 let timer: ReturnType<typeof setTimeout> | undefined;
@@ -167,6 +175,26 @@ export function editFabrication(change: (project: Project) => void) {
   change(app.project);
   app.dirty = true;
   refresh();
+}
+
+/** Applies an edit to measurements: solved points stand, their metrics are evaluated anew. */
+export async function editMeasurements(change: (project: Project) => void) {
+  editFabrication(change);
+  const result = app.timeDomain.result;
+  if (!result || !app.project) return;
+  const run = solveRun;
+  const metrics = await backend.evaluate($state.snapshot(app.project) as Project, $state.snapshot(result.points));
+  if (run === solveRun && app.timeDomain.result) app.timeDomain.result.metrics = metrics;
+}
+
+/** Pins the current results as the baseline other configurations are compared with. */
+export function pinBaseline() {
+  if (!app.project) return;
+  app.baseline = {
+    name: app.project.name + (app.dirty ? ' (edited)' : ''),
+    preview: $state.snapshot(app.preview) as SweepResult | null,
+    timeDomain: $state.snapshot(app.timeDomain.result) as SweepResult | null,
+  };
 }
 
 /** Replaces the project with a structurally edited one (an element placed or removed). */

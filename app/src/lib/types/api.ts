@@ -164,6 +164,7 @@ export type PointOutcome =
  */
 export interface Api {
   clearance: Clearance;
+  differences: OrderDifference[];
   fabrication: Package;
   layout: Layout;
   manifests: Manifest[];
@@ -180,6 +181,8 @@ export interface Api {
         status: "failed";
       };
   sweep: SweepResult;
+  tracks: OrderTracks;
+  tuning: Tuning;
 }
 /**
  * This interface was referenced by `Api`'s JSON-Schema
@@ -263,6 +266,33 @@ export interface RouteClearance {
   at_mm: number;
   min_mm: number;
   route: string;
+}
+/**
+ * An engine order of two solved configurations, `b − a`.
+ *
+ * This interface was referenced by `Api`'s JSON-Schema
+ * via the `definition` "OrderDifference".
+ */
+export interface OrderDifference {
+  /**
+   * Mean level difference over the cruise band, at speeds both solved, dB.
+   */
+  cruise_db?: number | null;
+  /**
+   * The largest difference either way over the sweep, `[rpm, dB]`.
+   *
+   * @minItems 2
+   * @maxItems 2
+   */
+  largest?: [number, number] | null;
+  order: number;
+  /**
+   * Highest level over the sweep, of `a` and of `b`, dB.
+   *
+   * @minItems 2
+   * @maxItems 2
+   */
+  peak_db: [number | null, number | null];
 }
 /**
  * This interface was referenced by `Api`'s JSON-Schema
@@ -653,4 +683,84 @@ export interface DroneReport {
    * Speeds in the track whose time-domain run did not reach periodicity.
    */
   unconverged_rpm: number[];
+}
+/**
+ * Levels of engine orders against engine speed from a recording.
+ *
+ * This interface was referenced by `Api`'s JSON-Schema
+ * via the `definition` "OrderTracks".
+ */
+export interface OrderTracks {
+  /**
+   * Levels in dB re 20 µPa; otherwise dB re full scale.
+   */
+  calibrated: boolean;
+  /**
+   * The firing order's drone, as reported for the prediction.
+   */
+  drone?: DroneReport | null;
+  /**
+   * Frames analysed and frames within the sweep.
+   *
+   * @minItems 2
+   * @maxItems 2
+   */
+  frames: [number, number];
+  orders: OrderTrack[];
+  /**
+   * Speed-bin centres (the project's sweep), rpm.
+   */
+  rpm: number[];
+  /**
+   * Engine speed estimated from the recording, without a log.
+   */
+  rpm_estimated: boolean;
+}
+/**
+ * This interface was referenced by `Api`'s JSON-Schema
+ * via the `definition` "OrderTrack".
+ */
+export interface OrderTrack {
+  /**
+   * Per speed bin; `None` where the recording has no frame.
+   */
+  level_db: (number | null)[];
+  order: number;
+}
+/**
+ * This interface was referenced by `Api`'s JSON-Schema
+ * via the `definition` "Tuning".
+ */
+export interface Tuning {
+  /**
+   * The value for the hottest and for the coolest branch gas; absent when the walls are not
+   * computed and no temperature is stated.
+   *
+   * @minItems 2
+   * @maxItems 2
+   */
+  band?: [number, number] | null;
+  /**
+   * Where the branch gas temperature comes from.
+   */
+  basis: string;
+  /**
+   * Mean branch gas temperature at each value (nominal, then hottest and coolest), K.
+   */
+  branch_temperature_k: number[];
+  element: string;
+  /**
+   * The parameter sized: `length_mm` (stub) or `volume_l` (Helmholtz).
+   */
+  parameter: string;
+  /**
+   * The branch's resonance as drawn.
+   */
+  resonance_hz: number;
+  /**
+   * Engine speed whose thermal state the branch gas takes.
+   */
+  rpm: number;
+  target_hz: number;
+  value: number;
 }

@@ -2,6 +2,7 @@
   import { backend } from './backend';
   import { JOINT, mm } from './format';
   import { app, commit, edit, editFabrication, manifestOf } from './state.svelte';
+  import Tune from './Tune.svelte';
   import type { Element, Joint, Project, Route } from './types/project';
 
   type Vec3 = [number, number, number];
@@ -187,6 +188,9 @@
         </div>
       {/if}
     {/each}
+    {#if element.type === 'quarter_wave_stub' || element.type === 'helmholtz'}
+      {#key element.id}<Tune {element} />{/key}
+    {/if}
     {#if twoPort(element)}
       <button class="gap" onclick={() => takeOut(element.id)} title="Join the pipes either side through where it was">
         Remove {element.id}

@@ -1,8 +1,19 @@
 // Typed calls into the Rust backend (app/src-tauri/src/lib.rs); every number the UI shows
 // comes back through here.
 import { Channel, invoke } from '@tauri-apps/api/core';
-import type { Clearance, Layout, Manifest, Package, PointOutcome, SweepResult } from './types/api';
-import type { Project } from './types/project';
+import type {
+  Clearance,
+  Layout,
+  Manifest,
+  Metrics,
+  OrderDifference,
+  OrderTracks,
+  Package,
+  PointOutcome,
+  SweepResult,
+  Tuning,
+} from './types/api';
+import type { CabinTf, Project } from './types/project';
 
 /** A scan mesh in scan units: xyz per vertex, three vertex indices per triangle. */
 export interface ScanMesh {
@@ -45,4 +56,17 @@ export const backend = {
   },
   /** Pipe clearance to the project's scan; rejects with the reason if it cannot be placed. */
   clearance: (project: Project) => invoke<Clearance>('clearance', { project }),
+  /** The stub length or Helmholtz volume that puts the branch's resonance at `targetHz`. */
+  tune: (project: Project, element: string, targetHz: number, rpm: number, statedK: [number, number] | null) =>
+    invoke<Tuning>('tune', { project, element, targetHz, rpm, statedK }),
+  /** Engine-order tracks of the project's recording `index`. */
+  orderTracks: (project: Project, index: number) => invoke<OrderTracks>('order_tracks', { project, index }),
+  cabinTfOrders: (project: Project, exterior: number, interior: number) =>
+    invoke<CabinTf>('cabin_tf_orders', { project, exterior, interior }),
+  cabinTfImpulse: (exterior: string, interior: string) => invoke<CabinTf>('cabin_tf_impulse', { exterior, interior }),
+  /** Metrics of solved points under the project's measurements as they are now. */
+  evaluate: (project: Project, points: PointOutcome[]) => invoke<Metrics>('evaluate', { project, points }),
+  /** Engine orders of `b` against `a`. */
+  compare: (project: Project, a: PointOutcome[], b: PointOutcome[]) =>
+    invoke<OrderDifference[]>('compare', { project, a, b }),
 };

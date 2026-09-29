@@ -41,6 +41,27 @@ test('a time-domain sweep streams in and is labelled as the reference', async ({
   await page.screenshot({ path: 'test-results/time-domain.png' });
 });
 
+test('a pinned baseline is compared order by order and overlaid', async ({ page }) => {
+  await page.getByRole('button', { name: 'Pin as baseline' }).click();
+  await expect(page.getByTestId('differences').locator('tbody tr')).toHaveCount(8);
+  await expect(page.getByTestId('plot').first().getByTestId('provenance')).toContainText('baseline');
+});
+
+test('recordings give measured order tracks and the cabin transfer function', async ({ page }) => {
+  await page.getByRole('tab', { name: 'Measurements' }).click();
+  const measurements = page.getByTestId('measurements');
+  await measurements.getByRole('button', { name: 'Add recording…' }).click();
+  await measurements.getByRole('button', { name: 'Add recording…' }).click();
+  const recording = page.getByTestId('recording');
+  await expect(recording).toHaveCount(2);
+  await expect(recording.first().getByTestId('provenance')).toContainText('rpm estimated from the recording');
+  await expect(recording.first().getByTestId('measured-drone')).toContainText('2603 rpm');
+  await recording.nth(1).locator('select').selectOption('interior');
+  await page.getByTestId('cabin-tf').getByRole('button', { name: 'Measure' }).click();
+  await expect(page.getByTestId('cabin-tf').getByTestId('provenance')).toContainText('order ratio');
+  await page.screenshot({ path: 'test-results/measurements.png' });
+});
+
 test('fabrication lists the parts and takes reference points picked on a scan', async ({ page }) => {
   await page.getByRole('tab', { name: 'Fabrication' }).click();
   await expect(page.getByTestId('parts')).toContainText('rear-pipe/B1');
@@ -55,4 +76,23 @@ test('fabrication lists the parts and takes reference points picked on a scan', 
   // On the scan's plane, in scan units.
   await expect(first).toContainText(/-?\d+\.\d{3}, -?\d+\.\d{3}, 0\.200/);
   await page.screenshot({ path: 'test-results/fabrication.png' });
+});
+
+test.describe('with a stub on the mid-pipe', () => {
+  test.beforeEach(async ({ page }) => {
+    await mockBackend(page, 'project-stub');
+    await page.goto('/');
+  });
+
+  test('a stub is tuned onto the drone with its thermal band', async ({ page }) => {
+    await page.getByTestId('elements').getByText('stub', { exact: true }).click();
+    const tune = page.getByTestId('tune');
+    await tune.getByRole('button', { name: 'Tune' }).click();
+    const result = page.getByTestId('tuning');
+    await expect(result).toContainText('Length 1189 mm');
+    await expect(result).toContainText('1189–2055 mm');
+    await result.getByRole('button', { name: 'Apply 1189 mm' }).click();
+    await expect(page.getByTestId('properties').locator('input[max="3000"]')).toHaveValue('1189');
+    await page.screenshot({ path: 'test-results/tune.png' });
+  });
 });

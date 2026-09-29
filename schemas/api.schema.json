@@ -7,6 +7,12 @@
     "clearance": {
       "$ref": "#/$defs/Clearance"
     },
+    "differences": {
+      "type": "array",
+      "items": {
+        "$ref": "#/$defs/OrderDifference"
+      }
+    },
     "fabrication": {
       "$ref": "#/$defs/Package"
     },
@@ -25,6 +31,12 @@
     },
     "sweep": {
       "$ref": "#/$defs/SweepResult"
+    },
+    "tracks": {
+      "$ref": "#/$defs/OrderTracks"
+    },
+    "tuning": {
+      "$ref": "#/$defs/Tuning"
     }
   },
   "required": [
@@ -33,7 +45,10 @@
     "sweep",
     "point",
     "fabrication",
-    "clearance"
+    "clearance",
+    "tuning",
+    "tracks",
+    "differences"
   ],
   "$defs": {
     "Clearance": {
@@ -484,6 +499,136 @@
       },
       "required": [
         "firing_order"
+      ]
+    },
+    "OrderDifference": {
+      "description": "An engine order of two solved configurations, `b − a`.",
+      "type": "object",
+      "properties": {
+        "cruise_db": {
+          "description": "Mean level difference over the cruise band, at speeds both solved, dB.",
+          "type": [
+            "number",
+            "null"
+          ],
+          "format": "double"
+        },
+        "largest": {
+          "description": "The largest difference either way over the sweep, `[rpm, dB]`.",
+          "type": [
+            "array",
+            "null"
+          ],
+          "items": {
+            "type": "number",
+            "format": "double"
+          },
+          "maxItems": 2,
+          "minItems": 2
+        },
+        "order": {
+          "type": "integer",
+          "format": "uint32",
+          "minimum": 0
+        },
+        "peak_db": {
+          "description": "Highest level over the sweep, of `a` and of `b`, dB.",
+          "type": "array",
+          "items": {
+            "type": [
+              "number",
+              "null"
+            ],
+            "format": "double"
+          },
+          "maxItems": 2,
+          "minItems": 2
+        }
+      },
+      "required": [
+        "order",
+        "peak_db"
+      ]
+    },
+    "OrderTrack": {
+      "type": "object",
+      "properties": {
+        "level_db": {
+          "description": "Per speed bin; `None` where the recording has no frame.",
+          "type": "array",
+          "items": {
+            "type": [
+              "number",
+              "null"
+            ],
+            "format": "double"
+          }
+        },
+        "order": {
+          "type": "number",
+          "format": "double"
+        }
+      },
+      "required": [
+        "order",
+        "level_db"
+      ]
+    },
+    "OrderTracks": {
+      "description": "Levels of engine orders against engine speed from a recording.",
+      "type": "object",
+      "properties": {
+        "calibrated": {
+          "description": "Levels in dB re 20 µPa; otherwise dB re full scale.",
+          "type": "boolean"
+        },
+        "drone": {
+          "description": "The firing order's drone, as reported for the prediction.",
+          "anyOf": [
+            {
+              "$ref": "#/$defs/DroneReport"
+            },
+            {
+              "type": "null"
+            }
+          ]
+        },
+        "frames": {
+          "description": "Frames analysed and frames within the sweep.",
+          "type": "array",
+          "items": {
+            "type": "integer",
+            "format": "uint",
+            "minimum": 0
+          },
+          "maxItems": 2,
+          "minItems": 2
+        },
+        "orders": {
+          "type": "array",
+          "items": {
+            "$ref": "#/$defs/OrderTrack"
+          }
+        },
+        "rpm": {
+          "description": "Speed-bin centres (the project's sweep), rpm.",
+          "type": "array",
+          "items": {
+            "type": "number",
+            "format": "double"
+          }
+        },
+        "rpm_estimated": {
+          "description": "Engine speed estimated from the recording, without a log.",
+          "type": "boolean"
+        }
+      },
+      "required": [
+        "rpm",
+        "orders",
+        "calibrated",
+        "rpm_estimated",
+        "frames"
       ]
     },
     "Package": {
@@ -1427,6 +1572,71 @@
         "cycles",
         "periodicity_residual",
         "periodicity_tolerance"
+      ]
+    },
+    "Tuning": {
+      "type": "object",
+      "properties": {
+        "band": {
+          "description": "The value for the hottest and for the coolest branch gas; absent when the walls are not\ncomputed and no temperature is stated.",
+          "type": [
+            "array",
+            "null"
+          ],
+          "items": {
+            "type": "number",
+            "format": "double"
+          },
+          "maxItems": 2,
+          "minItems": 2
+        },
+        "basis": {
+          "description": "Where the branch gas temperature comes from.",
+          "type": "string"
+        },
+        "branch_temperature_k": {
+          "description": "Mean branch gas temperature at each value (nominal, then hottest and coolest), K.",
+          "type": "array",
+          "items": {
+            "type": "number",
+            "format": "double"
+          }
+        },
+        "element": {
+          "type": "string"
+        },
+        "parameter": {
+          "description": "The parameter sized: `length_mm` (stub) or `volume_l` (Helmholtz).",
+          "type": "string"
+        },
+        "resonance_hz": {
+          "description": "The branch's resonance as drawn.",
+          "type": "number",
+          "format": "double"
+        },
+        "rpm": {
+          "description": "Engine speed whose thermal state the branch gas takes.",
+          "type": "number",
+          "format": "double"
+        },
+        "target_hz": {
+          "type": "number",
+          "format": "double"
+        },
+        "value": {
+          "type": "number",
+          "format": "double"
+        }
+      },
+      "required": [
+        "element",
+        "parameter",
+        "target_hz",
+        "rpm",
+        "resonance_hz",
+        "value",
+        "branch_temperature_k",
+        "basis"
       ]
     },
     "Weld": {

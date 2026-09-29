@@ -2,7 +2,7 @@
   import { open } from '@tauri-apps/plugin-dialog';
   import { untrack } from 'svelte';
   import { backend } from './backend';
-  import { JOINT, mm, od, vec } from './format';
+  import { fileName, JOINT, mm, od, vec } from './format';
   import { app, editFabrication, REFERENCE_COLOURS } from './state.svelte';
   import type { Package, Part } from './types/api';
   import type { Fabrication, Project } from './types/project';
@@ -41,7 +41,11 @@
   });
 
   const num = (e: Event) => Number((e.currentTarget as HTMLInputElement).value);
-  const setFab = (change: (f: Fabrication) => void) => editFabrication((p) => change((p.fabrication ??= {})));
+  const setFab = (change: (f: Fabrication) => void) =>
+    editFabrication((p) => {
+      p.fabrication ??= {};
+      change(p.fabrication);
+    });
   const zeros = (): [Vec3, Vec3, Vec3] => [
     [0, 0, 0],
     [0, 0, 0],
@@ -114,7 +118,6 @@
     ),
   );
   const noted = $derived((pkg?.welds ?? []).filter((w) => w.note));
-  const fileName = (path: string) => path.split(/[\\/]/).pop();
 </script>
 
 {#snippet vec3(value: Vec3, onchange: (v: Vec3) => void)}
