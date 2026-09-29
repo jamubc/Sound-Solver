@@ -104,7 +104,9 @@
         <input type="radio" bind:group={player.listener} value="stereo" disabled={!rendering} /> stereo head at the receiver,
         ears
         <input class="short" type="number" min="100" max="250" value={player.earSpacingMm} onchange={(e) => (player.earSpacingMm = num(e))} />
-        mm apart
+        mm apart, turned
+        <input class="short" type="number" min="-180" max="180" step="15" value={player.headTurnDeg} onchange={(e) => (player.headTurnDeg = num(e))} />
+        ° from the tailpipe
       </label>
       <label class:off={!rendering} title={rendering ? 'ISO 362 microphone: 7.5 m from the path, 1.2 m up' : 'Render only'}>
         <input type="radio" bind:group={player.listener} value="pass_by" disabled={!rendering} /> pass-by at

@@ -69,10 +69,11 @@ pub struct Scene {
 pub enum Listener {
     /// The project's receiver: one channel.
     Receiver,
-    /// A head at the receiver facing the reference outlet, ears `ear_spacing_mm` apart on the
-    /// horizontal line across that direction: two channels, left ear first. Each ear is a
-    /// free-field point; the head's shadow is not modelled.
-    Stereo { ear_spacing_mm: f64 },
+    /// A head at the receiver, facing the reference outlet turned `turn_deg` to the left (90:
+    /// the outlet at the right ear), ears `ear_spacing_mm` apart on the horizontal line across
+    /// the facing: two channels, left ear first. Each ear is a free-field point; the head's
+    /// shadow is not modelled.
+    Stereo { ear_spacing_mm: f64, turn_deg: f64 },
     /// Microphones at rest beside the vehicle: one channel each.
     Points { positions_mm: Vec<Vec3> },
     /// The vehicle drives along its +x axis past a microphone at rest. `mic_mm` is in the
@@ -394,14 +395,22 @@ fn play(
             vec![("driver's ear".into(), receiver()?)],
             Motion::at_rest(),
         ),
-        Listener::Stereo { ear_spacing_mm } => {
+        Listener::Stereo {
+            ear_spacing_mm,
+            turn_deg,
+        } => {
             if !(ear_spacing_mm.is_finite() && *ear_spacing_mm > 0.0) {
                 return Err(Error::invalid("the ear spacing must be positive"));
             }
             let r = reference_outlet(project, &st.model)?;
             let head = receiver_position(project, &st.model, r);
             let o = st.model.outlets[r].position;
-            let facing = unit([o[0] - head[0], o[1] - head[1], 0.0]);
+            let to_outlet = unit([o[0] - head[0], o[1] - head[1], 0.0]);
+            let (s, c) = turn_deg.to_radians().sin_cos();
+            let facing = [
+                to_outlet[0] * c - to_outlet[1] * s,
+                to_outlet[0] * s + to_outlet[1] * c,
+            ];
             let left = scale([-facing[1], facing[0], 0.0], 0.5 * ear_spacing_mm * 1e-3);
             (
                 vec![

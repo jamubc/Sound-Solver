@@ -510,7 +510,7 @@
           ]
         },
         {
-          "description": "A head at the receiver facing the reference outlet, ears `ear_spacing_mm` apart on the\nhorizontal line across that direction: two channels, left ear first. Each ear is a\nfree-field point; the head's shadow is not modelled.",
+          "description": "A head at the receiver, facing the reference outlet turned `turn_deg` to the left (90:\nthe outlet at the right ear), ears `ear_spacing_mm` apart on the horizontal line across\nthe facing: two channels, left ear first. Each ear is a free-field point; the head's\nshadow is not modelled.",
           "type": "object",
           "properties": {
             "ear_spacing_mm": {
@@ -520,12 +520,17 @@
             "kind": {
               "type": "string",
               "const": "stereo"
+            },
+            "turn_deg": {
+              "type": "number",
+              "format": "double"
             }
           },
           "additionalProperties": false,
           "required": [
             "kind",
-            "ear_spacing_mm"
+            "ear_spacing_mm",
+            "turn_deg"
           ]
         },
         {

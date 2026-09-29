@@ -45,6 +45,8 @@ export const player = $state({
   passBySpeedKmh: 50,
   passBySide: 'right' as 'left' | 'right',
   earSpacingMm: 175,
+  /** Head turned left from facing the tailpipe, degrees (90: the tailpipe at the right ear). */
+  headTurnDeg: 90,
   volume: 0.7,
   playing: null as Which | null,
   loading: false,
@@ -100,7 +102,7 @@ function listenerOf(project: Project): Listener {
     case 'cabin':
       return { kind: 'cabin' };
     case 'stereo':
-      return { kind: 'stereo', ear_spacing_mm: player.earSpacingMm };
+      return { kind: 'stereo', ear_spacing_mm: player.earSpacingMm, turn_deg: player.headTurnDeg };
     case 'pass_by': {
       const side = player.passBySide === 'left' ? 1 : -1;
       return {

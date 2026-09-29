@@ -157,6 +157,7 @@ export type Listener =
   | {
       ear_spacing_mm: number;
       kind: "stereo";
+      turn_deg: number;
     }
   | {
       kind: "points";
