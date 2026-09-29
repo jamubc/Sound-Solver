@@ -86,6 +86,74 @@ impl State {
     }
 }
 
+/// Steady isentropic flow through a varying area, in a perfect gas of fixed γ (the cell's):
+/// mass flow `g = ρuA`, total enthalpy `h = c²/(γ−1) + u²/2` and entropy `k = p/ρ^γ` hold
+/// along it. Reconstructing these in cones makes the scheme exact for steady flow there
+/// (well-balanced for moving equilibria, cf. hydrostatic reconstruction; Kröner & Thanh 2005).
+#[derive(Clone, Copy, Debug)]
+pub struct Isentrope {
+    pub g: f64,
+    pub h: f64,
+    pub k: f64,
+    gamma: f64,
+    /// Density at the state it was taken through: the subsonic branch is sought from here.
+    rho: f64,
+}
+
+impl Isentrope {
+    /// Through `(ρ, u, p)` at area `a`; `None` unless the flow is subsonic.
+    pub fn through(rho: f64, u: f64, p: f64, gamma: f64, a: f64) -> Option<Self> {
+        let c2 = gamma * p / rho;
+        (u * u < c2).then(|| Self {
+            g: rho * u * a,
+            h: c2 / (gamma - 1.0) + 0.5 * u * u,
+            k: p / rho.powf(gamma),
+            gamma,
+            rho,
+        })
+    }
+
+    /// With the invariants `(g, h, k)` moved by `d`.
+    pub fn shifted(&self, d: [f64; 3]) -> Self {
+        Self {
+            g: self.g + d[0],
+            h: self.h + d[1],
+            k: self.k + d[2],
+            ..*self
+        }
+    }
+
+    /// `(ρ, u, p)` at area `a` on the subsonic branch (Newton in ρ); `None` if the flow would
+    /// choke there.
+    pub fn at(&self, a: f64) -> Option<(f64, f64, f64)> {
+        let gm1 = self.gamma - 1.0;
+        let mut rho = self.rho;
+        for _ in 0..40 {
+            let u = self.g / (rho * a);
+            let c2 = self.gamma * self.k * rho.powf(gm1);
+            let df = (c2 - u * u) / rho;
+            if df.is_nan() || df <= 0.0 {
+                return None;
+            }
+            let step = (c2 / gm1 + 0.5 * u * u - self.h) / df;
+            rho -= step;
+            if rho.is_nan() || rho <= 0.0 {
+                return None;
+            }
+            if step.abs() <= 1e-12 * rho {
+                return Some((rho, self.g / (rho * a), self.k * rho.powf(self.gamma)));
+            }
+        }
+        None
+    }
+
+    /// Momentum flux `g u + p a` at area `a`: its change across a cell is `∫ p dA` along the
+    /// isentrope.
+    pub fn momentum_flux(&self, a: f64) -> Option<f64> {
+        self.at(a).map(|(_, u, p)| self.g * u + p * a)
+    }
+}
+
 /// HLLC approximate Riemann solver (Toro 2009, §10.4, eqs. 10.37–10.40), Davis wave-speed
 /// estimates `S_L = min(u_L − c_L, u_R − c_R)`, `S_R = max(u_L + c_L, u_R + c_R)`.
 /// Returns the interface flux per unit area of (mass, momentum, energy).

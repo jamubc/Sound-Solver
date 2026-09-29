@@ -189,6 +189,27 @@ pub fn bend_loss(angle_rad: f64, radius_over_d: f64) -> f64 {
     a1(deg) * b1
 }
 
+/// Loss coefficient of a conical transition for flow from diameter `d_in` to `d_out` over
+/// `length`, on the small-end velocity (Crane TP-410, 1988, p. A-26): with included angle θ
+/// and `β = d_small/d_large`, a diffuser loses `2.6 sin(θ/2) (1 − β²)²` up to θ = 45° and the
+/// sudden expansion's `(1 − β²)²` beyond; a nozzle `0.8 sin(θ/2) (1 − β²)` up to 45° and
+/// `0.5 √sin(θ/2) (1 − β²)` beyond. The flow solver's cones are otherwise lossless.
+pub fn cone_loss(d_in: f64, d_out: f64, length: f64) -> f64 {
+    let (small, large) = (d_in.min(d_out), d_in.max(d_out));
+    let half = ((large - small) / (2.0 * length)).atan();
+    let area = 1.0 - (small / large).powi(2);
+    let wide = half > 22.5f64.to_radians();
+    if d_out > d_in {
+        area * area * if wide { 1.0 } else { 2.6 * half.sin() }
+    } else {
+        area * if wide {
+            0.5 * half.sin().sqrt()
+        } else {
+            0.8 * half.sin()
+        }
+    }
+}
+
 #[cfg(test)]
 mod tests {
     use super::*;

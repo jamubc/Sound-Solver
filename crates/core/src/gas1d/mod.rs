@@ -14,8 +14,12 @@
 //! Riemann solver (Toro 2009, §10.4) with MUSCL reconstruction of `(ρ, u, p)` and a TVD limiter;
 //! SSP-RK2 (Heun) in time; `Δt = CFL · min Δx/(|u| + c)`, CFL ≤ 0.8. The `p dA/dx` term is
 //! `pᵢ (A_{i+½} − A_{i−½})`, which balances the interface pressure fluxes exactly for gas at
-//! rest. Cells next to a duct end use zero slope (first order); by Gustafsson's theorem this
-//! keeps second-order global accuracy. Duct ends couple through [`Node`]s, which return the
+//! rest. Cells whose area varies instead reconstruct steady-flow invariants and take the
+//! source along their isentrope (`scheme::Isentrope`), which balances steady flow through a
+//! cone exactly: otherwise a steep cone loses total pressure to the scheme (a 43° catalyst
+//! cone on four cells lost 2 ½ρu²). Cells next to a duct end use zero slope (first order); by
+//! Gustafsson's theorem this keeps second-order global accuracy. Duct ends couple through
+//! [`Node`]s, which return the
 //! boundary-face state from the interior state (exact Riemann wave curves or linear
 //! characteristics, see `nodes`).
 
@@ -39,7 +43,7 @@ pub const MAX_PORTS: usize = 8;
 /// TVB bound of `Limiter::VanLeerTvb`, as a fraction of the cell's ρ, c and p.
 pub const TVB_BOUND: f64 = 1e-3;
 pub use scheme::Limiter;
-use scheme::{State, hllc};
+use scheme::{Isentrope, State, hllc};
 
 /// Which end of a duct a node attaches to.
 #[derive(Clone, Copy, Debug, PartialEq, Eq)]
@@ -233,19 +237,21 @@ impl Duct {
         self
     }
 
-    /// Spreads a minor loss `k` over `[x0, x1]` in proportion to cell overlap. A zero-length
-    /// interval puts it in the cell containing `x0`.
-    pub fn add_loss(&mut self, x0: f64, x1: f64, k: f64) {
+    /// Spreads a minor loss `k`, referred to the velocity at area `a_ref`, over `[x0, x1]` in
+    /// proportion to cell overlap (each cell's share rescaled to its own velocity). A
+    /// zero-length interval puts it in the cell containing `x0`.
+    pub fn add_loss(&mut self, x0: f64, x1: f64, k: f64, a_ref: f64) {
         let n = self.n();
+        let on_cell = |i: usize| (self.volume[i] / self.dx / a_ref).powi(2);
         if x1 <= x0 {
             let i = ((x0 / self.dx) as usize).min(n - 1);
-            self.k_loss[i] += k;
+            self.k_loss[i] += k * on_cell(i);
             return;
         }
         for i in 0..n {
             let (a, b) = (i as f64 * self.dx, (i + 1) as f64 * self.dx);
             let overlap = (b.min(x1) - a.max(x0)).max(0.0);
-            self.k_loss[i] += k * overlap / (x1 - x0);
+            self.k_loss[i] += k * overlap / (x1 - x0) * on_cell(i);
         }
     }
 
@@ -427,6 +433,8 @@ pub struct Simulation {
     prim: Vec<Vec<Prim>>,
     rhs: Vec<Vec<[f64; 3]>>,
     slope: Vec<[[f64; 3]; 2]>,
+    /// Face states and p dA source of cells reconstructed on their isentrope.
+    cone: Vec<Option<([State; 2], f64)>>,
     pub nodes: Vec<NodeState>,
     /// Largest Courant number of any step taken.
     pub max_cfl: f64,
@@ -533,6 +541,7 @@ impl Simulation {
             prim,
             rhs,
             slope: vec![[[0.0; 3]; 2]; max_n],
+            cone: vec![None; max_n],
             nodes,
             net,
             t: 0.0,
@@ -814,9 +823,26 @@ impl Simulation {
     }
 
     fn port_state(&self, port: Port) -> PortState {
-        let duct = &self.net.ducts[port.duct];
-        let p = self.prim[port.duct][duct.end_cell(port.end)];
-        let gamma = self.net.gas.gamma(p.t);
+        let (gas, duct) = (&self.net.gas, &self.net.ducts[port.duct]);
+        let i = duct.end_cell(port.end);
+        let mut p = self.prim[port.duct][i];
+        // A cell whose area varies meets its node on its isentrope at the end area.
+        if duct.area_face[i] != duct.area_face[i + 1]
+            && let Some((rho, u, pr)) =
+                Isentrope::through(p.rho, p.u, p.p, gas.gamma(p.t), duct.volume[i] / duct.dx)
+                    .and_then(|c| c.at(duct.end_area(port.end)))
+        {
+            let t = pr / (rho * gas.r());
+            p = Prim {
+                rho,
+                u,
+                p: pr,
+                t,
+                c: gas.sound_speed(t),
+                en: p.en,
+            };
+        }
+        let gamma = gas.gamma(p.t);
         let v = match port.end {
             End::End => p.u,
             End::Start => -p.u,
@@ -927,7 +953,50 @@ impl Simulation {
                 let p = limiter.offsets(b.p - a.p, c.p - b.p, TVB_BOUND * b.p);
                 off[i] = [[r.0, u.0, p.0], [r.1, u.1, p.1]];
             }
+            // Cells whose area varies reconstruct the steady-flow invariants instead and meet
+            // their faces on the isentrope through them (`Isentrope`); their p dA source is that
+            // isentrope's momentum-flux change. Steady flow through a cone then meets no jumps
+            // and loses no total pressure to the scheme at any grid; at rest this is the plain
+            // scheme. Where the isentrope would choke, the cell keeps the plain reconstruction.
+            let cone = &mut self.cone[..n];
+            let varies = |i: usize| duct.area_face[i] != duct.area_face[i + 1];
+            let iso = |i: usize| {
+                let p = &prim[i];
+                let area = duct.volume[i] / duct.dx;
+                Isentrope::through(p.rho, p.u, p.p, gas.gamma(p.t), area)
+            };
+            for i in 0..n {
+                cone[i] = None;
+                let Some(c) = varies(i).then(|| iso(i)).flatten() else {
+                    continue;
+                };
+                let mut dv = [[0.0; 3]; 2];
+                if let (true, Some(a), Some(b)) = (
+                    i > 0 && i + 1 < n,
+                    iso(i.max(1) - 1),
+                    iso((i + 1).min(n - 1)),
+                ) {
+                    let p = &prim[i];
+                    let bounds = [p.rho * p.c * duct.volume[i] / duct.dx, p.c * p.c, c.k];
+                    let vals = [(a.g, c.g, b.g), (a.h, c.h, b.h), (a.k, c.k, b.k)];
+                    for (k, ((x0, x1, x2), bound)) in vals.into_iter().zip(bounds).enumerate() {
+                        let (l, r) = limiter.offsets(x1 - x0, x2 - x1, TVB_BOUND * bound);
+                        dv[0][k] = -l;
+                        dv[1][k] = r;
+                    }
+                }
+                let (al, ar) = (duct.area_face[i], duct.area_face[i + 1]);
+                let faces = c.shifted(dv[0]).at(al).zip(c.shifted(dv[1]).at(ar));
+                let source = c.momentum_flux(ar).zip(c.momentum_flux(al));
+                if let (Some((l, r)), Some((fr, fl))) = (faces, source) {
+                    let st = |(rho, u, p): (f64, f64, f64)| State::from_primitive(gas, rho, u, p);
+                    cone[i] = Some(([st(l), st(r)], fr - fl));
+                }
+            }
             let face_state = |i: usize, sign: f64| -> State {
+                if let Some((faces, _)) = cone[i] {
+                    return faces[(sign > 0.0) as usize];
+                }
                 let s = off[i][(sign > 0.0) as usize];
                 if s == [0.0; 3] {
                     return prim[i].state();
@@ -960,7 +1029,10 @@ impl Simulation {
                     f_prev[1] - f_next[1],
                     f_prev[2] - f_next[2],
                 ];
-                r[1] += p.p * (duct.area_face[i + 1] - duct.area_face[i]);
+                r[1] += match cone[i] {
+                    Some((_, source)) => source,
+                    None => p.p * (duct.area_face[i + 1] - duct.area_face[i]),
+                };
                 let dia = duct.diameter[i];
                 if duct.friction {
                     let mu = gas.viscosity(p.t);

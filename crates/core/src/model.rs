@@ -2,7 +2,7 @@
 //! continuous-area element (a tapered area change, or one between equal bores) form one
 //! finite-volume duct with a piecewise diameter profile, so cones sit in the second-order
 //! interior of the scheme; every other element becomes a node. Bends add Idelchik loss
-//! coefficients over their arcs.
+//! coefficients over their arcs, cones Crane's over their tapers.
 
 use std::collections::HashMap;
 
@@ -11,7 +11,7 @@ use crate::engine::EvoState;
 use crate::error::{Error, Result};
 use crate::gas::Gas;
 use crate::gas1d::{Duct, End, Manifold, Network, Node, Port, RadiationBc, SourceBc};
-use crate::geometry::{Piece, Vec3, bend_loss, centreline, scale};
+use crate::geometry::{Piece, Vec3, bend_loss, centreline, cone_loss, scale};
 use crate::project::{ElementKind, PortRef, Project};
 
 /// Network plus the bookkeeping needed to read results back onto the project.
@@ -27,10 +27,6 @@ pub struct Model {
     /// Modelling limitations that affect accuracy, reported with every result.
     pub warnings: Vec<String>,
 }
-
-/// Cones resolved by fewer cells than this carry a warning: the grid study in
-/// `validation::grid` shows mean-pressure errors near 1 % below it.
-const MIN_CONE_CELLS: f64 = 6.0;
 
 #[derive(Clone, Debug)]
 pub struct OutletInfo {
@@ -92,19 +88,6 @@ pub fn build(project: &Project, gas: Gas, dx: f64, src: SourceInputs) -> Result<
         }
     }
 
-    let mut warnings = Vec::new();
-    for el in &project.system.elements {
-        if let ElementKind::AreaChange { taper_length_mm } = el.kind
-            && taper_length_mm > 0.0
-            && taper_length_mm * 1e-3 / dx < MIN_CONE_CELLS
-        {
-            warnings.push(format!(
-                "cone '{}' ({taper_length_mm} mm) spans {:.1} cells; mean pressure across it may be off by ~1 % at this grid",
-                el.id,
-                taper_length_mm * 1e-3 / dx
-            ));
-        }
-    }
     let mut b = Builder {
         project,
         gas,
@@ -113,7 +96,7 @@ pub fn build(project: &Project, gas: Gas, dx: f64, src: SourceInputs) -> Result<
         nodes: Vec::new(),
         ports: HashMap::new(),
         pipes: HashMap::new(),
-        warnings,
+        warnings: Vec::new(),
     };
     for r in routes {
         b.pipes.insert(r.from.clone(), r.pipe.clone());
@@ -144,6 +127,7 @@ pub fn build(project: &Project, gas: Gas, dx: f64, src: SourceInputs) -> Result<
                         offset + s0,
                         offset + s0 + length,
                         bend_loss(*angle, radius / d),
+                        d,
                     ));
                 }
             }
@@ -151,7 +135,10 @@ pub fn build(project: &Project, gas: Gas, dx: f64, src: SourceInputs) -> Result<
             match next[r] {
                 Some((b, taper)) if route_duct[b].0 == usize::MAX => {
                     if taper > 0.0 {
-                        segments.push((taper, d, routes[b].pipe.id_m()));
+                        let d_next = routes[b].pipe.id_m();
+                        segments.push((taper, d, d_next));
+                        let k = cone_loss(d, d_next, taper);
+                        losses.push((offset, offset + taper, k, d.min(d_next)));
                         offset += taper;
                     }
                     r = b;
@@ -162,8 +149,8 @@ pub fn build(project: &Project, gas: Gas, dx: f64, src: SourceInputs) -> Result<
         b.ports.insert(routes[first].from.clone(), Port::start(idx));
         b.ports.insert(routes[r].to.clone(), Port::end(idx));
         let mut duct = Duct::from_profile(labels.join(" + "), &segments, dx);
-        for (x0, x1, k) in losses {
-            duct.add_loss(x0, x1, k);
+        for (x0, x1, k, d_ref) in losses {
+            duct.add_loss(x0, x1, k, std::f64::consts::PI / 4.0 * d_ref * d_ref);
         }
         let pipe = &routes[first].pipe;
         duct.wall = b.pipe_wall(pipe.od_mm * 1e-3, pipe.wall_mm * 1e-3, &pipe.material);

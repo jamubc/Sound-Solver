@@ -14,6 +14,7 @@ use crate::error::{Error, Result};
 use crate::gas::Gas;
 use crate::gas1d::nodes::JunctionKind;
 use crate::gas1d::{Duct, JunctionBc, Node, Perforate, Porous, Port, WallSpec};
+use crate::geometry::cone_loss;
 use crate::project::{
     Absorptive, Catalyst, Element, ElementKind, ExpansionChamber, Helmholtz, PipeSpec, PortRef,
     Project, QuarterWaveStub, Valve, WallThermal,
@@ -274,11 +275,12 @@ fn helmholtz(el: &Element, h: &Helmholtz, b: &mut Builder) {
     b.node(Node::Wall(Port::end(cavity)));
 }
 
-/// Catalyst: cones between pipe and can, and a brick of square channels. The brick is a duct
-/// of the open frontal area `OFA · A_can`, `OFA = (w/pitch)²`, hydraulic diameter `w`
-/// (channel width), laminar channel friction (`f Re = 14.227`) plus the developing-flow
-/// entrance loss `K(∞) = 1.43`. Faces are sudden area changes (contraction into the channels,
-/// Borda–Carnot expansion out). The can is insulated: no heat loss.
+/// Catalyst: cones between pipe and can (Crane losses, `geometry::cone_loss`), and a brick of
+/// square channels. The brick is a duct of the open frontal area `OFA · A_can`,
+/// `OFA = (w/pitch)²`, hydraulic diameter `w` (channel width), laminar channel friction
+/// (`f Re = 14.227`) plus the developing-flow entrance loss `K(∞) = 1.43`. Faces are sudden
+/// area changes (contraction into the channels, Borda–Carnot expansion out). The can is
+/// insulated: no heat loss.
 fn catalyst(el: &Element, c: &Catalyst, b: &mut Builder) {
     let pitch = 25.4e-3 / c.cpsi.sqrt();
     let w = pitch - c.cell_wall_mm * 1e-3;
@@ -288,15 +290,15 @@ fn catalyst(el: &Element, c: &Catalyst, b: &mut Builder) {
     let pin = b.port(el, "in");
     let pout = b.port(el, "out");
     let mut face_in = pin;
+    let cone = |label: &str, length: f64, d_in: f64, d_out: f64, dx: f64| {
+        let mut cone = Duct::conical(format!("{} ({label})", el.id), length, d_in, d_out, dx);
+        let small = d_in.min(d_out);
+        cone.add_loss(0.0, length, cone_loss(d_in, d_out, length), circle(small));
+        cone
+    };
     if c.inlet_cone_mm > 0.0 {
         let d = b.bore(pin);
-        let cone = b.duct(Duct::conical(
-            format!("{} (inlet cone)", el.id),
-            c.inlet_cone_mm * 1e-3,
-            d,
-            db,
-            b.dx,
-        ));
+        let cone = b.duct(cone("inlet cone", c.inlet_cone_mm * 1e-3, d, db, b.dx));
         b.join(pin, Port::start(cone));
         face_in = Port::end(cone);
     }
@@ -313,13 +315,7 @@ fn catalyst(el: &Element, c: &Catalyst, b: &mut Builder) {
     b.join(face_in, Port::start(brick));
     if c.outlet_cone_mm > 0.0 {
         let d = b.bore(pout);
-        let cone = b.duct(Duct::conical(
-            format!("{} (outlet cone)", el.id),
-            c.outlet_cone_mm * 1e-3,
-            db,
-            d,
-            b.dx,
-        ));
+        let cone = b.duct(cone("outlet cone", c.outlet_cone_mm * 1e-3, db, d, b.dx));
         b.join(Port::end(brick), Port::start(cone));
         b.join(Port::end(cone), pout);
     } else {
