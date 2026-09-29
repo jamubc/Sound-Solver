@@ -1,20 +1,29 @@
+/* Design tokens: one neutral dark theme, one accent; solver colours mark where numbers come from. */
 :root {
-  --bg: #11151d;
-  --panel: #181d27;
-  --panel-2: #1f2531;
-  --line: #2b3342;
-  --text: #d9dfe9;
-  --muted: #8a94a6;
-  --accent: #6aa9ff;
+  --bg: #0e1116;
+  --canvas: #12161d;
+  --panel: #161a21;
+  --panel-2: #1c212a;
+  --panel-3: #232935;
+  --line: #262d39;
+  --line-2: #323a48;
+  --text: #d6dbe4;
+  --muted: #8490a2;
+  --faint: #5c6677;
+  --accent: #4c9dff;
+  --accent-soft: rgba(76, 157, 255, 0.14);
   --td: #ff9f43;
   --fp: #6aa9ff;
   --warn: #f5c451;
   --bad: #ff6b6b;
   --good: #5fd08a;
+  --radius: 4px;
+  --control: 24px;
   color-scheme: dark;
-  font: 13px/1.4 -apple-system, BlinkMacSystemFont, 'Segoe UI', sans-serif;
+  font: 12px/1.35 -apple-system, BlinkMacSystemFont, 'Inter', 'Segoe UI', sans-serif;
   color: var(--text);
   background: var(--bg);
+  -webkit-font-smoothing: antialiased;
 }
 
 * {
@@ -33,9 +42,10 @@ button {
   font: inherit;
   color: var(--text);
   background: var(--panel-2);
-  border: 1px solid var(--line);
-  border-radius: 4px;
-  padding: 4px 10px;
+  border: 1px solid var(--line-2);
+  border-radius: var(--radius);
+  min-height: var(--control);
+  padding: 2px 9px;
   cursor: pointer;
 }
 
@@ -44,13 +54,17 @@ button:hover:not(:disabled) {
 }
 
 button:disabled {
-  opacity: 0.5;
+  opacity: 0.45;
   cursor: default;
 }
 
 button.primary {
-  background: #25406a;
-  border-color: #35598f;
+  background: #1f4a80;
+  border-color: #2d65a8;
+}
+
+button.danger {
+  border-color: #6a2e35;
 }
 
 input,
@@ -58,10 +72,28 @@ select {
   font: inherit;
   color: var(--text);
   background: var(--bg);
-  border: 1px solid var(--line);
+  border: 1px solid var(--line-2);
   border-radius: 3px;
-  padding: 2px 4px;
+  height: var(--control);
+  padding: 2px 6px;
   min-width: 0;
+}
+
+input:focus,
+select:focus {
+  outline: none;
+  border-color: var(--accent);
+  box-shadow: 0 0 0 2px var(--accent-soft);
+}
+
+input[type='number'] {
+  font-variant-numeric: tabular-nums;
+  text-align: right;
+}
+
+input[type='radio'],
+input[type='checkbox'] {
+  height: auto;
 }
 
 input:invalid {
@@ -76,12 +108,22 @@ input[type='number']::-webkit-outer-spin-button {
 }
 
 h2 {
-  font-size: 12px;
+  font-size: 11px;
   font-weight: 600;
   text-transform: uppercase;
-  letter-spacing: 0.04em;
+  letter-spacing: 0.06em;
   color: var(--muted);
   margin: 0 0 6px;
+}
+
+h3 {
+  font-size: 11.5px;
+  font-weight: 600;
+  margin: 10px 0 4px;
+}
+
+p {
+  margin: 4px 0;
 }
 
 .muted {
@@ -90,4 +132,43 @@ h2 {
 
 .mono {
   font-variant-numeric: tabular-nums;
+}
+
+.chip {
+  display: inline-block;
+  font-size: 10.5px;
+  font-weight: 400;
+  text-transform: none;
+  letter-spacing: 0;
+  padding: 0 6px;
+  border-radius: 8px;
+  border: 1px solid var(--line-2);
+  color: var(--muted);
+  white-space: nowrap;
+}
+
+.chip.td {
+  border-color: var(--td);
+  color: var(--td);
+}
+
+.chip.fp {
+  border-color: var(--fp);
+  color: var(--fp);
+}
+
+::-webkit-scrollbar {
+  width: 10px;
+  height: 10px;
+}
+
+::-webkit-scrollbar-thumb {
+  background: var(--line-2);
+  border: 3px solid transparent;
+  border-radius: 6px;
+  background-clip: content-box;
+}
+
+::-webkit-scrollbar-track {
+  background: transparent;
 }

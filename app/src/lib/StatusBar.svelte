@@ -1,4 +1,5 @@
 <script lang="ts">
+  import { notice } from './actions.svelte';
   import { lengthUnit, mm, od, vec } from './format';
   import { app, manifestOf } from './state.svelte';
 
@@ -64,6 +65,7 @@
 
 <footer data-testid="status">
   <span class="selection" title={selection}>{selection}</span>
+  {#if notice.text}<span class="notice" class:bad={notice.bad} data-testid="notice">{notice.text}</span>{/if}
   <span class="solver">
     {#if td.running}
       <span class="progress" title={running || 'starting'} data-testid="td-progress">
@@ -99,6 +101,14 @@
     overflow: hidden;
     text-overflow: ellipsis;
     white-space: nowrap;
+  }
+
+  .notice {
+    max-width: 40%;
+    overflow: hidden;
+    text-overflow: ellipsis;
+    white-space: nowrap;
+    color: var(--good);
   }
 
   .solver {

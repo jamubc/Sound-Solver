@@ -2,6 +2,7 @@
   import { open } from '@tauri-apps/plugin-dialog';
   import { untrack } from 'svelte';
   import type uPlot from 'uplot';
+  import { addRecording } from './actions.svelte';
   import { backend } from './backend';
   import { db, fileName, ORDER_COLOURS, rpm } from './format';
   import Plot from './Plot.svelte';
@@ -62,11 +63,6 @@
       change(p.measurements.recordings);
     });
 
-  const addRecording = () =>
-    attempt(async () => {
-      const path = await pickFile('Recording', ['wav', 'caf']);
-      if (path) setRecordings((list) => list.push({ path, position: 'exterior', log_offset_s: 0 }));
-    });
   const addLog = (i: number) =>
     attempt(async () => {
       const path = await pickFile('Engine-speed log', ['csv', 'txt']);
@@ -302,12 +298,18 @@
 </div>
 
 <style>
+  /* Sections side by side in the wide dock. */
   .measurements {
-    padding: 10px 12px;
+    display: grid;
+    grid-template-columns: repeat(auto-fill, minmax(460px, 1fr));
+    align-items: start;
+    gap: 0 22px;
+    padding: 10px 14px;
   }
 
   section {
     margin-bottom: 14px;
+    min-width: 0;
   }
 
   h3 {

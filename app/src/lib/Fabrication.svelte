@@ -1,6 +1,6 @@
 <script lang="ts">
-  import { open } from '@tauri-apps/plugin-dialog';
   import { untrack } from 'svelte';
+  import { loadScan } from './actions.svelte';
   import { backend } from './backend';
   import { fileName, fromShown, JOINT, lengthUnit, mm, od, shown, toShown, vec } from './format';
   import { app, editFabrication, REFERENCE_COLOURS } from './state.svelte';
@@ -48,12 +48,6 @@
       p.fabrication ??= {};
       change(p.fabrication);
     });
-  const zeros = (): [Vec3, Vec3, Vec3] => [
-    [0, 0, 0],
-    [0, 0, 0],
-    [0, 0, 0],
-  ];
-
   async function attempt(action: () => Promise<void>) {
     failure = null;
     try {
@@ -62,22 +56,6 @@
       failure = String(e);
     }
   }
-
-  const loadScan = () =>
-    attempt(async () => {
-      const filters = [{ name: 'Underbody scan', extensions: ['stl', 'obj'] }];
-      const path = await open({ filters, multiple: false, directory: false });
-      if (typeof path !== 'string') return;
-      // A new scan keeps the jack-pad coordinates; its points are picked afresh.
-      setFab((f) => {
-        f.scan = {
-          path,
-          unit_mm: f.scan?.unit_mm ?? 1000,
-          scan_points: zeros(),
-          vehicle_points_mm: f.scan?.vehicle_points_mm ?? zeros(),
-        };
-      });
-    });
 
   /** Saves the project, then writes the package beside it. */
   const exportPackage = () =>
@@ -347,12 +325,18 @@
 </div>
 
 <style>
+  /* Sections side by side in the wide dock. */
   .fabrication {
-    padding: 10px 12px;
+    display: grid;
+    grid-template-columns: repeat(auto-fill, minmax(380px, 1fr));
+    align-items: start;
+    gap: 0 22px;
+    padding: 10px 14px;
   }
 
   section {
     margin-bottom: 14px;
+    min-width: 0;
   }
 
   h3 {

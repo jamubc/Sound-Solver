@@ -23,6 +23,14 @@ export interface ScanMesh {
   index: Uint32Array;
 }
 
+/** Receiver pressure, Pa, and the engine orders a cabin transfer function had to leave out. */
+export interface Sound {
+  sampleRate: number;
+  peakPa: number;
+  dropped: number;
+  samples: Float32Array;
+}
+
 export const backend = {
   stockProject: () => invoke<Project>('stock_project'),
   openProject: (path: string) => invoke<Project>('open_project', { path }),
@@ -70,6 +78,24 @@ export const backend = {
   cabinTfImpulse: (exterior: string, interior: string) => invoke<CabinTf>('cabin_tf_impulse', { exterior, interior }),
   /** Metrics of solved points under the project's measurements as they are now. */
   evaluate: (project: Project, points: PointOutcome[]) => invoke<Metrics>('evaluate', { project, points }),
+  /** The receiver pressure of solved points as the engine goes from `fromRpm` to `toRpm`. */
+  async listen(
+    project: Project,
+    points: PointOutcome[],
+    fromRpm: number,
+    toRpm: number,
+    seconds: number,
+    interior: boolean,
+  ): Promise<Sound> {
+    const bytes = await invoke<ArrayBuffer>('listen', { project, points, fromRpm, toRpm, seconds, interior });
+    const header = new DataView(bytes, 0, 20);
+    return {
+      sampleRate: header.getFloat64(0, true),
+      peakPa: header.getFloat64(8, true),
+      dropped: header.getUint32(16, true),
+      samples: new Float32Array(bytes, 20),
+    };
+  },
   /** Engine orders of `b` against `a`. */
   compare: (project: Project, a: PointOutcome[], b: PointOutcome[]) =>
     invoke<OrderDifference[]>('compare', { project, a, b }),

@@ -53,6 +53,17 @@ export async function mockBackend(page: Page, project: 'project' | 'project-stub
       cabin_tf_impulse: () => a.cabinTf,
       evaluate: () => a.preview.metrics,
       compare: () => a.compare,
+      // One second of a 70 Hz tone at 1 Pa peak: the header, then the samples.
+      listen: () => {
+        const n = 22050;
+        const bytes = new ArrayBuffer(20 + 4 * n);
+        const header = new DataView(bytes);
+        header.setFloat64(0, 22050, true);
+        header.setFloat64(8, 1, true);
+        header.setUint32(16, 0, true);
+        new Float32Array(bytes, 20, n).set(Array.from({ length: n }, (_, i) => Math.sin((2 * Math.PI * 70 * i) / 22050)));
+        return bytes;
+      },
       // A flat underbody 200 mm above the flange, in metres: 4 vertices, 2 triangles.
       scan_mesh: () => {
         const v = [-4, -1, 0.2, 1, -1, 0.2, 1, 1, 0.2, -4, 1, 0.2];

@@ -65,7 +65,6 @@
 </script>
 
 <section data-testid="tune">
-  <h2 class="gap">Tune to a drone</h2>
   <label class="row">
     <span class="label">Drone at</span>
     <input type="number" step="10" value={rpm} onchange={(e) => setRpm(Number(e.currentTarget.value))} />
@@ -133,10 +132,6 @@
   .range {
     font-size: 11px;
     margin: -2px 0 4px 114px;
-  }
-
-  .gap {
-    margin-top: 12px;
   }
 
   .result {

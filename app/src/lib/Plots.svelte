@@ -1,12 +1,12 @@
 <script lang="ts">
   import type uPlot from 'uplot';
-  import Compare from './Compare.svelte';
-  import DroneReport from './DroneReport.svelte';
   import { ORDER_COLOURS } from './format';
   import Plot from './Plot.svelte';
   import { type Chip, provenance } from './provenance';
   import { app, solved } from './state.svelte';
   import type { PointResult } from './types/api';
+
+  let { show, height = 190 }: { show: 'firing' | 'spectrum' | 'orders' | 'level' | 'backpressure'; height?: number } = $props();
 
   const fp = $derived(app.preview ? solved(app.preview.points) : []);
   const td = $derived(solved(app.timeDomain.points));
@@ -134,9 +134,7 @@
   const pick = (rpm: number) => (app.rpm = rpm);
 </script>
 
-<div class="plots">
-  <DroneReport />
-  <Compare />
+{#if show === 'firing'}
   <Plot
     title={`Firing order (${firingOrder}) at the receiver`}
     provenance={firingChips}
@@ -145,9 +143,11 @@
     x="rpm"
     y="dB re 20 µPa"
     floor={60}
+    {height}
     unavailable={rpms.length ? null : app.invalid ? 'The project is not solvable as edited.' : 'Solving…'}
     onpick={pick}
   />
+{:else if show === 'spectrum'}
   <Plot
     title={spectrumPoint ? `Spectrum at ${spectrumPoint.rpm} rpm` : 'Spectrum'}
     provenance={spectrumPoint ? [...provenance([spectrumPoint]), ...baseChips(baseSpectrum ? [baseSpectrum] : [])] : []}
@@ -160,8 +160,10 @@
     y="dB re 20 µPa"
     floor={60}
     bars
+    {height}
     unavailable={spectrumPoint ? null : 'Click an engine speed on a plot to show its spectrum.'}
   />
+{:else if show === 'orders'}
   <Plot
     title="Engine orders 1–8"
     provenance={bestChips}
@@ -170,9 +172,11 @@
     x="rpm"
     y="dB re 20 µPa"
     floor={60}
+    {height}
     unavailable={best.length ? null : 'No solution yet.'}
     onpick={pick}
   />
+{:else if show === 'level'}
   <Plot
     title="Overall level"
     provenance={bestChips}
@@ -185,9 +189,11 @@
     x="rpm"
     y="dB"
     floor={60}
+    {height}
     unavailable={best.length ? null : 'No solution yet.'}
     onpick={pick}
   />
+{:else}
   <Plot
     title="Mean backpressure at the downpipe flange"
     provenance={[...provenance(td, app.timeDomain.total), ...baseChips(baseTd)]}
@@ -198,15 +204,8 @@
     ]}
     x="rpm"
     y="Pa"
-    unavailable={td.length
-      ? null
-      : 'Mean flow comes from the time-domain solution only: run “Solve time domain”.'}
+    {height}
+    unavailable={td.length ? null : 'Mean flow comes from the time-domain solution only: run “Solve time domain”.'}
     onpick={pick}
   />
-</div>
-
-<style>
-  .plots {
-    padding: 10px 12px;
-  }
-</style>
+{/if}

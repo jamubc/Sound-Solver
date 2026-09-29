@@ -1,19 +1,17 @@
 <script lang="ts">
   import { onMount } from 'svelte';
   import { backend } from './lib/backend';
-  import Fabrication from './lib/Fabrication.svelte';
-  import Measurements from './lib/Measurements.svelte';
-  import Plots from './lib/Plots.svelte';
-  import Properties from './lib/Properties.svelte';
+  import Browser from './lib/Browser.svelte';
+  import Dock from './lib/Dock.svelte';
+  import Inspector from './lib/Inspector.svelte';
+  import Ribbon from './lib/Ribbon.svelte';
+  import Splitter from './lib/Splitter.svelte';
   import { app, load } from './lib/state.svelte';
   import StatusBar from './lib/StatusBar.svelte';
-  import Toolbar from './lib/Toolbar.svelte';
-  import Tree from './lib/Tree.svelte';
+  import { persist, ui } from './lib/ui.svelte';
   import Viewport from './lib/Viewport.svelte';
 
   let unavailable = $state<string | null>(null);
-  const TABS = { acoustics: 'Acoustics', measurements: 'Measurements', fabrication: 'Fabrication' } as const;
-  let tab = $state<keyof typeof TABS>('acoustics');
 
   onMount(async () => {
     try {
@@ -23,10 +21,15 @@
       unavailable = String(e);
     }
   });
+
+  const resized = (apply: () => void, done: boolean) => {
+    apply();
+    if (done) persist();
+  };
 </script>
 
-<div class="shell">
-  <Toolbar />
+<div class="shell" style:--browser="{ui.browserWidth}px" style:--inspector="{ui.inspectorWidth}px">
+  <Ribbon />
   <div class="banners">
     {#if unavailable}
       <div class="banner bad">Solver backend unavailable: {unavailable}</div>
@@ -35,42 +38,59 @@
       <div class="banner warn" data-testid="invalid">Not solvable as edited: {app.invalid}</div>
     {/if}
   </div>
-  <aside class="side">
-    <Tree />
-    <Properties />
-  </aside>
-  <main class="view">
-    <Viewport />
-  </main>
-  <section class="plots">
-    <div class="tabs" role="tablist">
-      {#each Object.entries(TABS) as [t, name]}
-        <button role="tab" aria-selected={tab === t} class:on={tab === t} onclick={() => (tab = t as keyof typeof TABS)}>
-          {name}
-        </button>
-      {/each}
-    </div>
-    {#if tab === 'acoustics'}
-      <Plots />
-    {:else if tab === 'measurements'}
-      <Measurements />
-    {:else}
-      <Fabrication />
-    {/if}
-  </section>
+  <div class="work">
+    <aside class="browser">
+      <Browser />
+    </aside>
+    <Splitter
+      axis="x"
+      size={ui.browserWidth}
+      min={180}
+      max={420}
+      onresize={(s, done) => resized(() => (ui.browserWidth = s), done)}
+    />
+    <main class="centre">
+      <div class="view">
+        <Viewport />
+      </div>
+      {#if ui.dockOpen}
+        <Splitter
+          axis="y"
+          size={ui.dockHeight}
+          min={160}
+          max={720}
+          invert
+          onresize={(s, done) => resized(() => (ui.dockHeight = s), done)}
+        />
+      {/if}
+      <div class="dock" style:height={ui.dockOpen ? `${ui.dockHeight}px` : 'auto'}>
+        <Dock />
+      </div>
+    </main>
+    <Splitter
+      axis="x"
+      size={ui.inspectorWidth}
+      min={280}
+      max={560}
+      invert
+      onresize={(s, done) => resized(() => (ui.inspectorWidth = s), done)}
+    />
+    <aside class="inspector">
+      <Inspector />
+    </aside>
+  </div>
   <StatusBar />
 </div>
 
 <style>
   .shell {
     display: grid;
-    grid-template-columns: 340px minmax(0, 1fr) 560px;
     grid-template-rows: auto auto minmax(0, 1fr) auto;
     grid-template-areas:
-      'top top top'
-      'banner banner banner'
-      'side view plots'
-      'status status status';
+      'ribbon'
+      'banner'
+      'work'
+      'status';
     height: 100%;
   }
 
@@ -79,7 +99,7 @@
   }
 
   .banner {
-    padding: 6px 12px;
+    padding: 5px 12px;
     border-bottom: 1px solid var(--line);
   }
 
@@ -91,49 +111,35 @@
     background: #3a321d;
   }
 
-  .side {
-    grid-area: side;
+  .work {
+    grid-area: work;
+    display: grid;
+    grid-template-columns: var(--browser) auto minmax(0, 1fr) auto var(--inspector);
+    min-height: 0;
+  }
+
+  .browser,
+  .inspector {
+    min-width: 0;
+    min-height: 0;
+    background: var(--panel);
+  }
+
+  .centre {
     display: flex;
     flex-direction: column;
+    min-width: 0;
     min-height: 0;
-    border-right: 1px solid var(--line);
-    background: var(--panel);
   }
 
   .view {
-    grid-area: view;
-    min-width: 0;
-    min-height: 0;
     position: relative;
+    flex: 1;
+    min-height: 120px;
   }
 
-  .plots {
-    grid-area: plots;
+  .dock {
+    flex: none;
     min-height: 0;
-    overflow-y: auto;
-    border-left: 1px solid var(--line);
-    background: var(--panel);
-  }
-
-  .tabs {
-    position: sticky;
-    top: 0;
-    z-index: 1;
-    display: flex;
-    gap: 4px;
-    padding: 8px 12px 0;
-    border-bottom: 1px solid var(--line);
-    background: var(--panel);
-  }
-
-  .tabs button {
-    border-bottom: none;
-    border-radius: 4px 4px 0 0;
-    background: none;
-  }
-
-  .tabs button.on {
-    background: var(--panel-2);
-    border-color: var(--accent);
   }
 </style>

@@ -46,13 +46,26 @@ test('element properties come from its manifest', async ({ page }) => {
 });
 
 test('a time-domain sweep streams in and is labelled as the reference', async ({ page }) => {
+  await page.getByRole('tab', { name: 'Simulate' }).click();
   await page.getByRole('button', { name: 'Solve time domain' }).click();
+  await expect(page.getByTestId('sweep-result')).toContainText('Sweep complete');
   const firing = page.getByTestId('plot').first().getByTestId('provenance');
   await expect(firing).toContainText('time domain');
   await expect(firing).toContainText('3/3 converged');
   await expect(page.getByTestId('drone')).toContainText('time domain');
   await expect(page.getByTestId('status')).toContainText('3 speeds, 3 converged');
   await page.screenshot({ path: 'test-results/time-domain.png' });
+});
+
+test('the prediction is heard, steady or as a run-up', async ({ page }) => {
+  await page.getByRole('tab', { name: 'Listen' }).click();
+  const listen = page.getByTestId('listen');
+  await listen.getByTestId('play').click();
+  await expect(listen.getByTestId('level-current')).toContainText('dB re 20 µPa');
+  await expect(listen).toContainText('playing current');
+  await listen.getByTestId('play').click();
+  await expect(listen).toContainText('stopped');
+  await page.screenshot({ path: 'test-results/listen.png' });
 });
 
 test('a pinned baseline is compared order by order and overlaid', async ({ page }) => {
@@ -62,7 +75,7 @@ test('a pinned baseline is compared order by order and overlaid', async ({ page 
 });
 
 test('recordings give measured order tracks and the cabin transfer function', async ({ page }) => {
-  await page.getByRole('tab', { name: 'Measurements' }).click();
+  await page.getByRole('tab', { name: 'Measure', exact: true }).click();
   const measurements = page.getByTestId('measurements');
   await measurements.getByRole('button', { name: 'Add recording…' }).click();
   await measurements.getByRole('button', { name: 'Add recording…' }).click();
@@ -77,7 +90,7 @@ test('recordings give measured order tracks and the cabin transfer function', as
 });
 
 test('fabrication lists the parts and takes reference points picked on a scan', async ({ page }) => {
-  await page.getByRole('tab', { name: 'Fabrication' }).click();
+  await page.getByRole('tab', { name: 'Fabricate', exact: true }).click();
   await expect(page.getByTestId('parts')).toContainText('rear-pipe/B1');
   // The reference project is not saved: there is nowhere to write the package.
   await expect(page.getByRole('button', { name: 'Export package' })).toBeDisabled();
