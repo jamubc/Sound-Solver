@@ -252,6 +252,66 @@ pub fn brent<F: FnMut(f64) -> f64>(
     Some(b)
 }
 
+/// Piecewise-linear function of time through knots `[t, value]` (times strictly increasing),
+/// held at the end values outside them, with its exact running integral from `t = 0`.
+#[derive(Clone, Debug, PartialEq)]
+pub struct Trace {
+    knots: Vec<[f64; 2]>,
+    /// `∫₀^{t_k} f` at each knot.
+    integral: Vec<f64>,
+}
+
+impl Trace {
+    /// `None` without knots, with times not strictly increasing, or with a non-finite number.
+    pub fn new(knots: Vec<[f64; 2]>) -> Option<Self> {
+        if knots.is_empty()
+            || knots.iter().flatten().any(|v| !v.is_finite())
+            || knots.windows(2).any(|w| w[1][0] <= w[0][0])
+        {
+            return None;
+        }
+        let mut integral = vec![knots[0][1] * knots[0][0]];
+        for w in knots.windows(2) {
+            let last = integral[integral.len() - 1];
+            integral.push(last + 0.5 * (w[0][1] + w[1][1]) * (w[1][0] - w[0][0]));
+        }
+        Some(Self { knots, integral })
+    }
+
+    pub fn constant(value: f64) -> Self {
+        Self {
+            knots: vec![[0.0, value]],
+            integral: vec![0.0],
+        }
+    }
+
+    pub fn knots(&self) -> &[[f64; 2]] {
+        &self.knots
+    }
+
+    pub fn at(&self, t: f64) -> f64 {
+        let k = self.knots.partition_point(|p| p[0] <= t);
+        if k == 0 {
+            return self.knots[0][1];
+        }
+        if k == self.knots.len() {
+            return self.knots[k - 1][1];
+        }
+        let (a, b) = (self.knots[k - 1], self.knots[k]);
+        a[1] + (b[1] - a[1]) * (t - a[0]) / (b[0] - a[0])
+    }
+
+    /// `∫₀ᵗ f`.
+    pub fn integral(&self, t: f64) -> f64 {
+        let k = self.knots.partition_point(|p| p[0] <= t);
+        if k == 0 {
+            return self.knots[0][1] * t;
+        }
+        let a = self.knots[k - 1];
+        self.integral[k - 1] + 0.5 * (a[1] + self.at(t)) * (t - a[0])
+    }
+}
+
 #[cfg(test)]
 mod tests {
     use super::*;
@@ -287,5 +347,25 @@ mod tests {
         assert!((v - 2.0).abs() < 1e-13);
         let r = brent(|x| x * x - 2.0, 0.0, 2.0, 1e-14, 100).unwrap();
         assert!((r - 2f64.sqrt()).abs() < 1e-13);
+    }
+
+    /// A ramp from 1000 to 3000 held either side: value and running integral against the
+    /// closed form.
+    #[test]
+    fn trace_values_and_integral() {
+        let tr = Trace::new(vec![[1.0, 1000.0], [3.0, 3000.0]]).unwrap();
+        let exact = |t: f64| match t {
+            t if t <= 1.0 => 1000.0 * t,
+            t if t <= 3.0 => 1000.0 + 1000.0 * (t - 1.0) + 500.0 * (t - 1.0).powi(2),
+            t => 1000.0 + 2000.0 + 2000.0 + 3000.0 * (t - 3.0),
+        };
+        for t in [-0.5, 0.0, 0.7, 1.0, 1.9, 3.0, 4.2] {
+            assert!((tr.integral(t) - exact(t)).abs() < 1e-9, "t {t}");
+        }
+        assert_eq!(
+            (tr.at(0.0), tr.at(2.0), tr.at(9.0)),
+            (1000.0, 2000.0, 3000.0)
+        );
+        assert!(Trace::new(vec![[1.0, 0.0], [1.0, 2.0]]).is_none());
     }
 }

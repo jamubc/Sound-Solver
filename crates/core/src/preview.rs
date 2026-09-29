@@ -101,7 +101,7 @@ pub fn norton(model: &Model, gas: &Gas, p_amb: f64) -> Result<NortonSource> {
 
 pub fn solve_point(project: &Project, rpm: f64) -> Result<PointResult> {
     let gas = Gas::exhaust(project.gas.fuel_h_to_c, project.gas.lambda)?;
-    let (evo, evo_source) = evo_state(project, &gas, rpm);
+    let (evo, evo_source) = evo_state(project, &gas, project.operating.map_at(rpm));
     let p_amb = project.ambient.pressure_pa;
     let model = build(
         project,

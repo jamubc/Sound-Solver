@@ -268,14 +268,10 @@ pub fn grid_summary(net: &Network) -> (usize, f64, f64) {
     )
 }
 
-/// EVO state for `rpm` and where it came from.
-pub fn evo_state(project: &Project, gas: &Gas, rpm: f64) -> (EvoState, EvoSource) {
-    if let Some(evo) = project.operating.evo_override {
-        return (evo, EvoSource::Given);
-    }
+/// The project's engine load at intake manifold pressure `map_kpa`.
+pub fn load(project: &Project, map_kpa: f64) -> Load {
     let op = &project.operating;
-    let map_kpa = op.map_at(rpm);
-    let load = Load {
+    Load {
         map_kpa,
         intake_temperature_k: op.intake_temperature_k,
         volumetric_efficiency: op.volumetric_efficiency,
@@ -283,12 +279,19 @@ pub fn evo_state(project: &Project, gas: &Gas, rpm: f64) -> (EvoState, EvoSource
         heat_retained: op.heat_retained,
         n_compression: op.n_compression,
         n_expansion: op.n_expansion,
-    };
+    }
+}
+
+/// EVO state at intake manifold pressure `map_kpa` and where it came from.
+pub fn evo_state(project: &Project, gas: &Gas, map_kpa: f64) -> (EvoState, EvoSource) {
+    if let Some(evo) = project.operating.evo_override {
+        return (evo, EvoSource::Given);
+    }
     let evo = estimate_evo_state(
         &project.engine.geometry,
         &project.engine.valves,
         gas,
-        &load,
+        &load(project, map_kpa),
         project.gas.fuel_h_to_c,
         project.gas.lambda,
     );
@@ -308,20 +311,41 @@ pub fn solve_point(project: &Project, rpm: f64) -> Result<PointResult> {
     solve_point_with(project, rpm, &mut |_| true)
 }
 
-/// `solve_point`, reporting every engine cycle to `on_cycle`, which stops the run by
-/// returning `false`.
-pub fn solve_point_with(
+/// The time-domain network run to a periodic state at one operating point, with what the
+/// analysis of that state needs.
+pub(crate) struct Settled {
+    pub gas: Gas,
+    pub evo: EvoState,
+    pub evo_source: EvoSource,
+    pub model: Model,
+    pub sim: Simulation,
+    pub rec: Recorder,
+    /// Cumulative counters at every cycle boundary, the last after the last cycle.
+    pub mass_marks: Vec<Marks>,
+    pub cycles: u32,
+    pub residual: f64,
+    /// Period of the solution in engine cycles (1 or 2).
+    pub period: u32,
+    /// Description of the wall and initial gas temperatures.
+    pub thermal: String,
+}
+
+/// Marches the network at `rpm` and intake pressure `map_kpa` on cells of about `dx` (m)
+/// until the last cycle agrees with the one before (or two before) to the periodicity
+/// tolerance, reporting every cycle to `on_cycle`, which stops the run by returning `false`.
+pub(crate) fn settle(
     project: &Project,
     rpm: f64,
+    map_kpa: f64,
+    dx: f64,
     on_cycle: &mut dyn FnMut(CycleProgress) -> bool,
-) -> Result<PointResult> {
+) -> Result<Settled> {
     if rpm.is_nan() || rpm <= 0.0 {
         return Err(Error::invalid("engine speed must be positive"));
     }
     let gas = Gas::exhaust(project.gas.fuel_h_to_c, project.gas.lambda)?;
-    let (evo, evo_source) = evo_state(project, &gas, rpm);
+    let (evo, evo_source) = evo_state(project, &gas, map_kpa);
     let settings = &project.solver;
-    let dx = settings.dx_mm * 1e-3;
     let p_amb = project.ambient.pressure_pa;
     let n_samples = settings.samples_per_cycle as usize;
 
@@ -411,7 +435,64 @@ pub fn solve_point_with(
         }
     }
     mass_marks.push(Marks::read(&sim, &model));
-    let converged = residual <= tol;
+    let thermal = match (&project.solver.wall_thermal, &profile) {
+        (WallThermal::Computed, Some(pr)) => format!(
+            "thermal model walls and initial gas; source {:.1} K, {:.4} kg/s [{}]",
+            pre.t0, pre.mass_flow, pr.hash
+        ),
+        (WallThermal::Fixed { temperature_k }, _) => {
+            format!("fixed wall {temperature_k:.1} K; initial gas {t_uniform:.1} K")
+        }
+        _ => format!("adiabatic walls; initial gas {t_uniform:.1} K from source pre-run"),
+    };
+    Ok(Settled {
+        gas,
+        evo,
+        evo_source,
+        model,
+        sim,
+        rec,
+        mass_marks,
+        cycles,
+        residual,
+        period,
+        thermal,
+    })
+}
+
+/// `solve_point`, reporting every engine cycle to `on_cycle`, which stops the run by
+/// returning `false`.
+pub fn solve_point_with(
+    project: &Project,
+    rpm: f64,
+    on_cycle: &mut dyn FnMut(CycleProgress) -> bool,
+) -> Result<PointResult> {
+    let settings = &project.solver;
+    let Settled {
+        gas,
+        evo,
+        evo_source,
+        model,
+        sim,
+        rec,
+        mass_marks,
+        cycles,
+        residual,
+        period,
+        thermal,
+    } = settle(
+        project,
+        rpm,
+        project.operating.map_at(rpm),
+        settings.dx_mm * 1e-3,
+        on_cycle,
+    )?;
+    let (p_amb, n_samples) = (
+        project.ambient.pressure_pa,
+        settings.samples_per_cycle as usize,
+    );
+    let cycle_time = 120.0 / rpm;
+    let converged = residual <= settings.periodicity_tolerance;
 
     // Analysis over the last four cycles.
     let analysed = 4.min(cycles as usize);
@@ -456,16 +537,6 @@ pub fn solve_point_with(
     let (turbine0, turbine1) = (m0.turbine_work, m1.turbine_work);
 
     let (cells, dx_min_mm, dx_max_mm) = grid_summary(&model.network);
-    let thermal = match (&project.solver.wall_thermal, &profile) {
-        (WallThermal::Computed, Some(pr)) => format!(
-            "thermal model walls and initial gas; source {:.1} K, {:.4} kg/s [{}]",
-            pre.t0, pre.mass_flow, pr.hash
-        ),
-        (WallThermal::Fixed { temperature_k }, _) => {
-            format!("fixed wall {temperature_k:.1} K; initial gas {t_uniform:.1} K")
-        }
-        _ => format!("adiabatic walls; initial gas {t_uniform:.1} K from source pre-run"),
-    };
     let thermal_hash = blake3::hash(thermal.as_bytes()).to_hex()[..16].to_string();
     Ok(PointResult {
         rpm,
@@ -529,7 +600,7 @@ fn run_cycle(
 }
 
 /// Cumulative counters at a cycle boundary.
-struct Marks {
+pub(crate) struct Marks {
     source: f64,
     outlets: Vec<f64>,
     outlet_energy: Vec<f64>,
@@ -557,9 +628,9 @@ impl Marks {
 }
 
 /// Sampled signals, one entry per sample, cycles appended.
-struct Recorder {
-    n: usize,
-    outlet_q: Vec<Vec<f64>>,
+pub(crate) struct Recorder {
+    pub n: usize,
+    pub outlet_q: Vec<Vec<f64>>,
     flange_p: Vec<f64>,
 }
 
@@ -579,7 +650,7 @@ impl Recorder {
         self.flange_p.push(sim.nodes[model.source_node].faces[0].p);
     }
 
-    fn last_cycles(&self, s: &[f64], cycles: usize) -> Vec<f64> {
+    pub fn last_cycles(&self, s: &[f64], cycles: usize) -> Vec<f64> {
         s[s.len() - cycles * self.n..].to_vec()
     }
 
@@ -603,7 +674,7 @@ impl Recorder {
     }
 }
 
-fn reference_outlet(project: &Project, model: &Model) -> Result<usize> {
+pub(crate) fn reference_outlet(project: &Project, model: &Model) -> Result<usize> {
     match &project.receiver.outlet {
         None => Ok(0),
         Some(id) => model

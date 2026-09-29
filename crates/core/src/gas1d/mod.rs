@@ -32,8 +32,8 @@ pub mod wall;
 use crate::error::{Error, Result};
 use crate::gas::Gas;
 pub use nodes::{
-    CharacteristicBc, CylPhase, JunctionBc, JunctionKind, Manifold, MassFlowBc, Node, RadiationBc,
-    Signal, SourceBc,
+    CharacteristicBc, CylPhase, EvoSupply, JunctionBc, JunctionKind, Manifold, MapSchedule,
+    MassFlowBc, Node, RadiationBc, Signal, SourceBc,
 };
 pub use porous::Porous;
 
@@ -402,6 +402,8 @@ pub struct NodeState {
     filter_pred: crate::radiation::LsFilter,
     w_plus_n: f64,
     pub cyl_phase: Vec<CylPhase>,
+    /// EVO state of each cylinder's current (or last) exhaust event (engine source).
+    pub cyl_evo: Vec<crate::engine::EvoState>,
     /// Face states from the latest evaluation, one per port.
     pub faces: Vec<FaceState>,
     /// Incident characteristic `W⁺` at the latest evaluation (radiation nodes), Pa.

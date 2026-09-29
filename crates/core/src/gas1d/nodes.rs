@@ -10,10 +10,12 @@ use std::slice;
 
 use super::scheme::{wave_f, wave_pressure, wave_rho};
 use super::{FaceState, NodeState, Port, PortState};
-use crate::engine::{EngineGeometry, EvoState, ExhaustValves, nozzle_mass_flux};
+use crate::engine::{
+    EngineGeometry, EvoState, ExhaustValves, Load, estimate_evo_state, nozzle_mass_flux,
+};
 use crate::error::{Error, Result};
 use crate::gas::Gas;
-use crate::math::brent;
+use crate::math::{Trace, brent};
 
 /// A node joining one or more duct ends.
 #[derive(Clone, Debug)]
@@ -517,10 +519,11 @@ pub struct SourceBc {
     pub port: Port,
     pub geometry: EngineGeometry,
     pub valves: ExhaustValves,
-    pub evo: EvoState,
+    pub evo: EvoSupply,
     /// Polytropic exponent of the cylinder gas after EVO.
     pub n_poly: f64,
-    pub rpm: f64,
+    /// Engine speed against time, rpm.
+    pub speed: Trace,
     /// Crank angle of cylinder 1 after its firing TDC at `t = 0`, degrees.
     pub theta0_deg: f64,
     pub manifolds: Vec<Manifold>,
@@ -531,8 +534,32 @@ pub struct SourceBc {
     pub t_init: f64,
     offsets: Vec<f64>,
     cyl_manifold: Vec<usize>,
-    m_evo: f64,
-    rho_evo: f64,
+    /// Cylinder volume at EVO, m³.
+    v_evo: f64,
+}
+
+/// In-cylinder state each exhaust event starts from.
+#[derive(Clone, Debug)]
+pub enum EvoSupply {
+    /// The same state at every event.
+    Fixed(EvoState),
+    /// The ideal Otto-cycle estimate (`engine::estimate_evo_state`) at the intake manifold
+    /// pressure of the moment.
+    Estimated {
+        load: Load,
+        map_kpa: MapSchedule,
+        fuel_h_to_c: f64,
+        lambda: f64,
+    },
+}
+
+/// Intake manifold pressure, kPa.
+#[derive(Clone, Debug)]
+pub enum MapSchedule {
+    /// Against time, s (a throttle trace).
+    OfTime(Trace),
+    /// Against engine speed, rpm (a load line).
+    OfSpeed(Trace),
 }
 
 impl SourceBc {
@@ -541,12 +568,11 @@ impl SourceBc {
         port: Port,
         geometry: EngineGeometry,
         valves: ExhaustValves,
-        evo: EvoState,
+        evo: EvoSupply,
         n_poly: f64,
-        rpm: f64,
+        speed: Trace,
         manifolds: Vec<Manifold>,
         extraction: f64,
-        gas: &Gas,
         p_init: f64,
         t_init: f64,
     ) -> Result<Self> {
@@ -574,18 +600,15 @@ impl SourceBc {
                 "each cylinder must discharge into exactly one manifold",
             ));
         }
-        let v_evo = geometry.volume(valves.evo_deg);
-        let rho_evo = evo.pressure_pa / (gas.r() * evo.temperature_k);
         Ok(Self {
             port,
             offsets: geometry.firing_offsets_deg(),
-            m_evo: rho_evo * v_evo,
-            rho_evo,
+            v_evo: geometry.volume(valves.evo_deg),
             geometry,
             valves,
             evo,
             n_poly,
-            rpm,
+            speed,
             theta0_deg: 0.0,
             manifolds,
             extraction,
@@ -595,14 +618,36 @@ impl SourceBc {
         })
     }
 
-    /// Cylinder `k`'s crank angle after its own firing TDC at time `t`.
+    /// Cylinder `k`'s crank angle after its own firing TDC at time `t`: the integral of the
+    /// engine speed.
     pub fn cylinder_angle(&self, k: usize, t: f64) -> f64 {
-        (self.theta0_deg + 6.0 * self.rpm * t - self.offsets[k]).rem_euclid(720.0)
+        (self.theta0_deg + 6.0 * self.speed.integral(t) - self.offsets[k]).rem_euclid(720.0)
     }
 
-    /// Mass trapped at EVO in one cylinder, kg.
-    pub fn m_evo(&self) -> f64 {
-        self.m_evo
+    /// In-cylinder state of an exhaust event opening at time `t`.
+    pub fn evo_at(&self, gas: &Gas, t: f64) -> EvoState {
+        match &self.evo {
+            EvoSupply::Fixed(s) => *s,
+            EvoSupply::Estimated {
+                load,
+                map_kpa,
+                fuel_h_to_c,
+                lambda,
+            } => estimate_evo_state(
+                &self.geometry,
+                &self.valves,
+                gas,
+                &Load {
+                    map_kpa: match map_kpa {
+                        MapSchedule::OfTime(m) => m.at(t),
+                        MapSchedule::OfSpeed(m) => m.at(self.speed.at(t)),
+                    },
+                    ..load.clone()
+                },
+                *fuel_h_to_c,
+                *lambda,
+            ),
+        }
     }
 
     pub(crate) fn init_state(&self, gas: &Gas, st: &mut NodeState) {
@@ -614,6 +659,7 @@ impl SourceBc {
             st.ode[n + 2 * j + 1] = mass * gas.e(self.t_init);
         }
         st.deriv = vec![0.0; st.ode.len()];
+        st.cyl_evo = vec![self.evo_at(gas, 0.0); n];
         st.cyl_phase = (0..n)
             .map(|k| {
                 if self.valves.is_open(self.cylinder_angle(k, 0.0)) {
@@ -625,14 +671,17 @@ impl SourceBc {
             .collect();
     }
 
-    /// Discrete EVO/EVC events after a step: a cylinder entering its valve event is reset to
-    /// the EVO mass. The lift is zero at EVO, so the step-size delay in the reset moves no mass.
-    pub(crate) fn update_phases(&self, t: f64, _gas: &Gas, st: &mut NodeState) {
+    /// Discrete EVO/EVC events after a step: a cylinder entering its valve event takes the EVO
+    /// state of the moment and the mass it implies. The lift is zero at EVO, so the step-size
+    /// delay in the reset moves no mass.
+    pub(crate) fn update_phases(&self, t: f64, gas: &Gas, st: &mut NodeState) {
         for k in 0..self.geometry.cylinders() {
             let inside = self.valves.is_open(self.cylinder_angle(k, t));
             st.cyl_phase[k] = match (st.cyl_phase[k], inside) {
                 (CylPhase::Closed, true) => {
-                    st.ode[k] = self.m_evo;
+                    let evo = self.evo_at(gas, t);
+                    st.ode[k] = evo.pressure_pa / (gas.r() * evo.temperature_k) * self.v_evo;
+                    st.cyl_evo[k] = evo;
                     CylPhase::Open
                 }
                 (CylPhase::Open, false) | (CylPhase::Skip, false) => CylPhase::Closed,
@@ -650,7 +699,8 @@ impl SourceBc {
     }
 
     /// Mass flow of cylinder `k`'s valves into its manifold at manifold state `(pm, tm)` and
-    /// mass `m_man`, and the stagnation enthalpy it carries. Zero while the valve is shut.
+    /// mass `m_man`, and the stagnation enthalpy it carries, the cylinder expanding
+    /// polytropically from its event's EVO state `evo`. Zero while the valve is shut.
     ///
     /// Overshoot limit: the orifice conductance `∂ṁ/∂Δp ∝ 1/√Δp` is unbounded as the two
     /// pressures meet, which explicit integration cannot follow. Over a step `Δt` no more mass
@@ -663,6 +713,7 @@ impl SourceBc {
         gas: &Gas,
         k: usize,
         t: f64,
+        evo: EvoState,
         m_cyl: f64,
         pm: f64,
         tm: f64,
@@ -676,7 +727,8 @@ impl SourceBc {
             return (0.0, 0.0);
         }
         let rho = m_cyl / self.geometry.volume(th);
-        let pc = self.evo.pressure_pa * (rho / self.rho_evo).powf(self.n_poly);
+        let rho_evo = evo.pressure_pa / (r * evo.temperature_k);
+        let pc = evo.pressure_pa * (rho / rho_evo).powf(self.n_poly);
         let tc = pc / (rho * r);
         let (mdot, h) = if pc >= pm {
             (
@@ -714,7 +766,17 @@ impl SourceBc {
             }
             let j = self.cyl_manifold[k];
             let m_man = st.ode[n + 2 * j];
-            let (mdot, h) = self.valve_flow(gas, k, t, st.ode[k], man[j].0, man[j].1, m_man, dt);
+            let (mdot, h) = self.valve_flow(
+                gas,
+                k,
+                t,
+                st.cyl_evo[k],
+                st.ode[k],
+                man[j].0,
+                man[j].1,
+                m_man,
+                dt,
+            );
             st.deriv[k] = -mdot;
             st.deriv[n + 2 * j] += mdot;
             st.deriv[n + 2 * j + 1] += mdot * h;
@@ -763,7 +825,8 @@ impl SourceBc {
     }
 
     /// Norton equivalent of the source seen from the downpipe face: the engine runs
-    /// `cycles` cycles into a constant face pressure `pb` (reverse flow draws gas at `t_back`),
+    /// `cycles` cycles at its speed at `t = 0` into a constant face pressure `pb` (reverse flow
+    /// draws gas at `t_back`),
     /// sampled `n` times per cycle over the last cycle. The short-circuit mass flow's harmonics
     /// are the Norton strength; the admittance linearises nozzle, manifold compliance and valve
     /// conductance about the cycle average (see [`NortonSource::admittance`]).
@@ -782,7 +845,7 @@ impl SourceBc {
         self.init_state(gas, &mut st);
         let ncyl = self.geometry.cylinders();
         let nm = self.manifolds.len();
-        let cycle = 120.0 / self.rpm;
+        let cycle = 120.0 / self.speed.at(0.0);
         // Steps of about 20 µs, the time-domain solver's order of magnitude.
         let sub = ((cycle / (n as f64 * 2e-5)).ceil() as usize).max(1);
         let dt = cycle / (n * sub) as f64;
@@ -840,7 +903,9 @@ impl SourceBc {
                         for &k in &m.cylinders {
                             if st.cyl_phase[k] == CylPhase::Open {
                                 let q = |pm: f64| {
-                                    self.valve_flow(gas, k, t, st.ode[k], pm, tm, m_man, 0.0).0
+                                    let evo = st.cyl_evo[k];
+                                    self.valve_flow(gas, k, t, evo, st.ode[k], pm, tm, m_man, 0.0)
+                                        .0
                                 };
                                 g += (q(pm - eps) - q(pm + eps)) / (2.0 * eps);
                             }

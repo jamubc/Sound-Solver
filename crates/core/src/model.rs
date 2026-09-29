@@ -10,8 +10,9 @@ use crate::elements::{self, Builder};
 use crate::engine::EvoState;
 use crate::error::{Error, Result};
 use crate::gas::Gas;
-use crate::gas1d::{Duct, End, Manifold, Network, Node, Port, RadiationBc, SourceBc};
+use crate::gas1d::{Duct, End, EvoSupply, Manifold, Network, Node, Port, RadiationBc, SourceBc};
 use crate::geometry::{Piece, Vec3, bend_loss, centreline, cone_loss, scale};
+use crate::math::Trace;
 use crate::project::{ElementKind, PortRef, Project};
 
 /// Network plus the bookkeeping needed to read results back onto the project.
@@ -187,12 +188,11 @@ pub fn build(project: &Project, gas: Gas, dx: f64, src: SourceInputs) -> Result<
                     port,
                     project.engine.geometry.clone(),
                     project.engine.valves.clone(),
-                    src.evo,
+                    EvoSupply::Fixed(src.evo),
                     project.engine.polytropic_exponent,
-                    src.rpm,
+                    Trace::constant(src.rpm),
                     manifolds,
                     t.extraction_factor,
-                    &b.gas,
                     src.p_init,
                     src.t_init,
                 )?;

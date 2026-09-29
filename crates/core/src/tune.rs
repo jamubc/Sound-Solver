@@ -81,7 +81,7 @@ pub fn tune(
     let dx = project.solver.dx_mm * 1e-3;
     let inputs = SourceInputs {
         rpm,
-        evo: evo_state(project, &gas, rpm).0,
+        evo: evo_state(project, &gas, project.operating.map_at(rpm)).0,
         p_init: 1.2 * p_amb,
         t_init: 900.0,
     };
