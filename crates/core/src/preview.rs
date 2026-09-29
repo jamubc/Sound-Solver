@@ -9,6 +9,12 @@
 //! radiate to the receiver exactly as in the time-domain result. Everything nonlinear is
 //! absent: source–pipe interaction beyond the linear admittance, loss nonlinearity, wave
 //! steepening, tailpipe inflow. Networks with orifices (valves) are flagged small-signal.
+//!
+//! The source interaction dominates near pipe resonances. On the stock W205 the network's
+//! flange-to-tailpipe transfer peaks at 2800 rpm in both solvers, but there the time domain's
+//! 2nd-order flange flow falls 8 dB against the Norton source's 2 dB (whichever back pressure
+//! the Norton run discharges into), so the preview's 2nd-order peak sits ~200 rpm above the
+//! time domain's. Size against time-domain results.
 
 use std::f64::consts::PI;
 
