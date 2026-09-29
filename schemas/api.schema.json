@@ -16,9 +16,6 @@
     "fabrication": {
       "$ref": "#/$defs/Package"
     },
-    "hold": {
-      "$ref": "#/$defs/HoldComparison"
-    },
     "layout": {
       "$ref": "#/$defs/Layout"
     },
@@ -34,6 +31,9 @@
     },
     "progress": {
       "$ref": "#/$defs/CycleProgress"
+    },
+    "recording_check": {
+      "$ref": "#/$defs/RecordingComparison"
     },
     "render": {
       "$ref": "#/$defs/RenderInfo"
@@ -77,7 +77,7 @@
     "scene",
     "render",
     "render_progress",
-    "hold",
+    "recording_check",
     "verification",
     "sensitivity"
   ],
@@ -532,48 +532,6 @@
         "to",
         "d_from_mm",
         "d_to_mm"
-      ]
-    },
-    "HoldComparison": {
-      "description": "A steady hold of a calibrated recording set against a render of the same engine speed at\nthe same place, band by band. Recordings validate; nothing here is fed back into an input.",
-      "type": "object",
-      "properties": {
-        "bands": {
-          "type": "array",
-          "items": {
-            "$ref": "#/$defs/BandComparison"
-          }
-        },
-        "rpm": {
-          "description": "Engine speed over the hold: mean and standard deviation, rpm.",
-          "type": "number",
-          "format": "double"
-        },
-        "rpm_estimated": {
-          "description": "Engine speed estimated from the recording, without a log.",
-          "type": "boolean"
-        },
-        "rpm_spread": {
-          "type": "number",
-          "format": "double"
-        },
-        "window_s": {
-          "description": "The hold, s from the recording's start.",
-          "type": "array",
-          "items": {
-            "type": "number",
-            "format": "double"
-          },
-          "maxItems": 2,
-          "minItems": 2
-        }
-      },
-      "required": [
-        "window_s",
-        "rpm",
-        "rpm_spread",
-        "rpm_estimated",
-        "bands"
       ]
     },
     "InputEffect": {
@@ -1790,6 +1748,52 @@
         }
       ]
     },
+    "RecordingComparison": {
+      "description": "A window of a calibrated recording set against a render of the same engine speed at the\nsame place. Recordings validate; nothing here is fed back into an input.",
+      "type": "object",
+      "properties": {
+        "bands": {
+          "type": "array",
+          "items": {
+            "$ref": "#/$defs/BandComparison"
+          }
+        },
+        "rpm": {
+          "description": "Engine speed over the window: mean and standard deviation, rpm.",
+          "type": "number",
+          "format": "double"
+        },
+        "rpm_estimated": {
+          "description": "Engine speed estimated from the recording, without a log.",
+          "type": "boolean"
+        },
+        "rpm_spread": {
+          "type": "number",
+          "format": "double"
+        },
+        "spectrogram": {
+          "$ref": "#/$defs/SpectrogramDifference"
+        },
+        "window_s": {
+          "description": "The window checked, s from the recording's start (at most 20 s).",
+          "type": "array",
+          "items": {
+            "type": "number",
+            "format": "double"
+          },
+          "maxItems": 2,
+          "minItems": 2
+        }
+      },
+      "required": [
+        "window_s",
+        "rpm",
+        "rpm_spread",
+        "rpm_estimated",
+        "bands",
+        "spectrogram"
+      ]
+    },
     "Refinement": {
       "type": "object",
       "properties": {
@@ -2294,6 +2298,43 @@
       "enum": [
         "time_domain",
         "four_pole"
+      ]
+    },
+    "SpectrogramDifference": {
+      "description": "Predicted less measured level in each ⅓-octave band of each frame (Hann, `frame_s` long,\nevery half frame).",
+      "type": "object",
+      "properties": {
+        "difference_db": {
+          "description": "Per frame, per band (`render::third_octaves`), dB; `None` where either level is\nmissing or below the recording's resolution.",
+          "type": "array",
+          "items": {
+            "type": "array",
+            "items": {
+              "type": [
+                "number",
+                "null"
+              ],
+              "format": "double"
+            }
+          }
+        },
+        "frame_s": {
+          "type": "number",
+          "format": "double"
+        },
+        "times_s": {
+          "description": "Frame centres, s from the window's start.",
+          "type": "array",
+          "items": {
+            "type": "number",
+            "format": "double"
+          }
+        }
+      },
+      "required": [
+        "frame_s",
+        "times_s",
+        "difference_db"
       ]
     },
     "StartState": {

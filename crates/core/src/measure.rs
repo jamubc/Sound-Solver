@@ -513,19 +513,13 @@ fn pa_per_unit(calibration_db: f64) -> f64 {
 /// Engine speed over `[t0, t1]` s of `rec`: mean and standard deviation, rpm, from `log` read
 /// `offset_s` after the recording's start, else estimated frame by frame over `lo..=hi`
 /// (`true` when estimated).
-pub fn hold_rpm(
+pub fn window_rpm(
     rec: &Recording,
     log: Option<&RpmLog>,
     offset_s: f64,
     [t0, t1]: [f64; 2],
     [lo, hi]: [f64; 2],
 ) -> Result<(f64, f64, bool)> {
-    let length = rec.samples.len() as f64 / rec.sample_rate;
-    if !(t0 >= 0.0 && t1 > t0 && t1 <= length) {
-        return Err(Error::invalid(format!(
-            "the hold must lie within the recording's {length:.1} s"
-        )));
-    }
     let speeds: Vec<f64> = match log {
         Some(log) => (0..=100)
             .filter_map(|i| log.at(t0 + (t1 - t0) * i as f64 / 100.0 + offset_s))
@@ -539,7 +533,7 @@ pub fn hold_rpm(
         }
     };
     if speeds.is_empty() {
-        return Err(Error::invalid("no engine speed over the hold"));
+        return Err(Error::invalid("no engine speed over the window"));
     }
     let n = speeds.len() as f64;
     let mean = speeds.iter().sum::<f64>() / n;
@@ -576,12 +570,37 @@ pub fn band_mean_squares(x: &[f64], fs: f64) -> Vec<Option<f64>> {
         .collect()
 }
 
-/// The scene a hold is checked against: the hold's engine speed on the project's load line,
-/// heard where the recording was made, for as long as the hold (1 to 4 s).
-pub fn hold_scene(rpm: f64, window_s: [f64; 2], position: MicPosition) -> Scene {
+/// Longest window a check renders, s.
+const WINDOW_MAX_S: f64 = 20.0;
+
+/// The scene a window of a recording is checked against: the engine speed over the window,
+/// from the log every 0.1 s (a run-up is rendered as a run-up), else the estimated mean; on
+/// the project's load line, heard where the recording was made, as long as the window.
+pub fn window_scene(
+    log: Option<&RpmLog>,
+    offset_s: f64,
+    window_s: [f64; 2],
+    mean_rpm: f64,
+    position: MicPosition,
+) -> Scene {
+    let duration = window_s[1] - window_s[0];
+    let logged: Vec<[f64; 2]> = log
+        .map(|log| {
+            (0..=(duration * 10.0).round() as usize)
+                .filter_map(|i| {
+                    let t = 0.1 * i as f64;
+                    log.at(window_s[0] + t + offset_s).map(|r| [t, r])
+                })
+                .collect()
+        })
+        .unwrap_or_default();
     Scene {
-        duration_s: (window_s[1] - window_s[0]).clamp(1.0, 4.0),
-        rpm: vec![[0.0, rpm]],
+        duration_s: duration,
+        rpm: if logged.is_empty() {
+            vec![[0.0, mean_rpm]]
+        } else {
+            logged
+        },
         map_kpa: None,
         listener: match position {
             MicPosition::Exterior => Listener::Receiver,
@@ -590,18 +609,19 @@ pub fn hold_scene(rpm: f64, window_s: [f64; 2], position: MicPosition) -> Scene 
     }
 }
 
-/// A steady hold of a calibrated recording set against a render of the same engine speed at
-/// the same place, band by band. Recordings validate; nothing here is fed back into an input.
+/// A window of a calibrated recording set against a render of the same engine speed at the
+/// same place. Recordings validate; nothing here is fed back into an input.
 #[derive(Clone, Debug, PartialEq, Serialize, JsonSchema)]
-pub struct HoldComparison {
-    /// The hold, s from the recording's start.
+pub struct RecordingComparison {
+    /// The window checked, s from the recording's start (at most 20 s).
     pub window_s: [f64; 2],
-    /// Engine speed over the hold: mean and standard deviation, rpm.
+    /// Engine speed over the window: mean and standard deviation, rpm.
     pub rpm: f64,
     pub rpm_spread: f64,
     /// Engine speed estimated from the recording, without a log.
     pub rpm_estimated: bool,
     pub bands: Vec<BandComparison>,
+    pub spectrogram: SpectrogramDifference,
 }
 
 #[derive(Clone, Debug, PartialEq, Serialize, JsonSchema)]
@@ -621,15 +641,104 @@ pub struct BandComparison {
     pub note: Option<String>,
 }
 
+/// Predicted less measured level in each ⅓-octave band of each frame (Hann, `frame_s` long,
+/// every half frame).
+#[derive(Clone, Debug, PartialEq, Serialize, JsonSchema)]
+pub struct SpectrogramDifference {
+    pub frame_s: f64,
+    /// Frame centres, s from the window's start.
+    pub times_s: Vec<f64>,
+    /// Per frame, per band (`render::third_octaves`), dB; `None` where either level is
+    /// missing or below the recording's resolution.
+    pub difference_db: Vec<Vec<Option<f64>>>,
+}
+
+/// A window checked: the comparison, and the recording's and the render's pressure over it.
+pub struct RecordingCheck {
+    pub comparison: RecordingComparison,
+    pub measured_pa: Vec<f32>,
+    pub measured_fs: f64,
+    pub predicted_pa: Vec<f32>,
+    pub predicted_fs: f64,
+}
+
 /// Dynamic range of a 16-bit recording, dB: a band further below full scale is not resolved.
 const RESOLUTION_DB: f64 = 96.0;
+/// Spectrogram frame, s.
+const SPECTROGRAM_FRAME_S: f64 = 0.25;
+
+/// Checks `window_s` (at least 1 s; the first 20 s of a longer one) of the project's
+/// recording `index` (`rec`, with its `log`) against the render `render` makes of
+/// `window_scene`, with an optional `background` recording taken with the same phone at the
+/// same gain.
+#[allow(clippy::type_complexity)]
+pub fn check_recording(
+    project: &Project,
+    index: usize,
+    rec: &Recording,
+    log: Option<&RpmLog>,
+    window_s: [f64; 2],
+    background: Option<&Recording>,
+    render: impl FnOnce(&Scene) -> Result<(crate::render::RenderInfo, Vec<Vec<f32>>)>,
+) -> Result<RecordingCheck> {
+    let spec = project
+        .measurements
+        .recordings
+        .get(index)
+        .ok_or_else(|| Error::invalid(format!("the project has no recording {index}")))?;
+    let cal = spec.calibration_db.ok_or_else(|| {
+        Error::invalid("calibrate the recording first: the comparison is in dB re 20 µPa")
+    })?;
+    let length = rec.samples.len() as f64 / rec.sample_rate;
+    let window = [window_s[0], window_s[1].min(window_s[0] + WINDOW_MAX_S)];
+    if !(window[0] >= 0.0 && window[1] <= length && window[1] - window[0] >= 1.0) {
+        return Err(Error::invalid(format!(
+            "the window must be at least 1 s long and lie within the recording's {length:.1} s"
+        )));
+    }
+    let [start, stop, _] = project.operating.sweep_rpm;
+    let (rpm, rpm_spread, rpm_estimated) =
+        window_rpm(rec, log, spec.log_offset_s, window, [start, stop])?;
+    let scene = window_scene(log, spec.log_offset_s, window, rpm, spec.position);
+    let (info, channels) = render(&scene)?;
+    let resolved: Vec<bool> = info.bands.iter().map(|b| b.resolved).collect();
+    let predicted = &channels[0];
+    Ok(RecordingCheck {
+        comparison: RecordingComparison {
+            window_s: window,
+            rpm,
+            rpm_spread,
+            rpm_estimated,
+            bands: compare_bands(
+                rec,
+                cal,
+                window,
+                background.map(|b| (b, cal)),
+                predicted,
+                info.sample_rate,
+                &resolved,
+            ),
+            spectrogram: spectrogram_difference(rec, cal, window, predicted, info.sample_rate),
+        },
+        measured_pa: pascals(rec, cal, window),
+        measured_fs: rec.sample_rate,
+        predicted_pa: predicted.clone(),
+        predicted_fs: info.sample_rate,
+    })
+}
+
+/// Level of a mean square, dB re 20 µPa, at `per_unit` pascals per unit.
+fn level(ms: Option<f64>, per_unit: f64) -> Option<f64> {
+    ms.filter(|m| *m > 0.0)
+        .map(|m| 10.0 * (m * per_unit * per_unit / 4e-10).log10())
+}
 
 /// `rec` over `window_s`, calibrated at `calibration_db`, against `predicted` (Pa, sampled at
 /// `predicted_fs`) band by band, with `resolved` the render's band status. A band more than
 /// the 16-bit range below full scale is left out. With a background recording (and its
 /// calibration) each band is corrected energy-wise where it stands 6–10 dB above the
 /// background and left out below 6 dB.
-pub fn compare_hold(
+pub fn compare_bands(
     rec: &Recording,
     calibration_db: f64,
     window_s: [f64; 2],
@@ -640,10 +749,6 @@ pub fn compare_hold(
 ) -> Vec<BandComparison> {
     let fs = rec.sample_rate;
     let seg = &rec.samples[(window_s[0] * fs) as usize..(window_s[1] * fs) as usize];
-    let db = |ms: Option<f64>, per_unit: f64| {
-        ms.filter(|m| *m > 0.0)
-            .map(|m| 10.0 * (m * per_unit * per_unit / 4e-10).log10())
-    };
     let measured = band_mean_squares(seg, fs);
     let noise = background.map(|(b, cal)| {
         (
@@ -658,26 +763,27 @@ pub fn compare_hold(
         .into_iter()
         .enumerate()
         .map(|(b, (center_hz, _, _))| {
-            let mut level = db(measured[b], per_unit);
-            let mut note = level.is_none().then(|| {
+            let mut measured_db = level(measured[b], per_unit);
+            let mut note = measured_db.is_none().then(|| {
                 if measured[b].is_none() {
                     "above the recording's Nyquist frequency".to_string()
                 } else {
                     "nothing recorded in the band".to_string()
                 }
             });
-            if level.is_some_and(|l| l < calibration_db - RESOLUTION_DB) {
-                level = None;
+            if measured_db.is_some_and(|l| l < calibration_db - RESOLUTION_DB) {
+                measured_db = None;
                 note = Some("below the recording's resolution".into());
             }
-            if let (Some(l), Some((bg, bg_unit))) = (level, &noise) {
-                match db(bg[b], *bg_unit) {
+            if let (Some(l), Some((bg, bg_unit))) = (measured_db, &noise) {
+                match level(bg[b], *bg_unit) {
                     Some(n) if l - n < 6.0 => {
-                        level = None;
+                        measured_db = None;
                         note = Some(format!("only {:.1} dB above the background", l - n));
                     }
                     Some(n) if l - n < 10.0 => {
-                        level = Some(10.0 * (10f64.powf(l / 10.0) - 10f64.powf(n / 10.0)).log10());
+                        measured_db =
+                            Some(10.0 * (10f64.powf(l / 10.0) - 10f64.powf(n / 10.0)).log10());
                         note = Some(format!(
                             "corrected for the background ({:.1} dB above)",
                             l - n
@@ -686,18 +792,70 @@ pub fn compare_hold(
                     _ => {}
                 }
             }
-            let predicted_db = db(predicted[b], 1.0);
+            let predicted_db = level(predicted[b], 1.0);
             BandComparison {
                 center_hz,
-                measured_db: level,
+                measured_db,
                 predicted_db,
-                error_db: level.zip(predicted_db).map(|(m, p)| p - m),
+                error_db: measured_db.zip(predicted_db).map(|(m, p)| p - m),
                 target_db: if center_hz <= 2000.0 { 3.0 } else { 5.0 },
                 resolved: resolved.get(b).copied().unwrap_or(false),
                 note,
             }
         })
         .collect()
+}
+
+/// Band-by-band difference of `predicted` (Pa at `predicted_fs`, from the window's start) and
+/// `rec` over `window_s`, frame by frame.
+fn spectrogram_difference(
+    rec: &Recording,
+    calibration_db: f64,
+    window_s: [f64; 2],
+    predicted: &[f32],
+    predicted_fs: f64,
+) -> SpectrogramDifference {
+    let frame = SPECTROGRAM_FRAME_S;
+    let span = (window_s[1] - window_s[0]).min(predicted.len() as f64 / predicted_fs);
+    let per_unit = pa_per_unit(calibration_db);
+    let (mut times_s, mut difference_db) = (Vec::new(), Vec::new());
+    let mut t = 0.0;
+    while t + frame <= span + 1e-9 {
+        let slice = |x: &dyn Fn(usize) -> f64, fs: f64, from: f64| -> Vec<f64> {
+            let a = (from * fs) as usize;
+            (a..a + (frame * fs) as usize).map(x).collect()
+        };
+        let m = slice(
+            &|i| rec.samples[i.min(rec.samples.len() - 1)],
+            rec.sample_rate,
+            window_s[0] + t,
+        );
+        let p = slice(
+            &|i| predicted[i.min(predicted.len() - 1)] as f64,
+            predicted_fs,
+            t,
+        );
+        let (lm, lp) = (
+            band_mean_squares(&m, rec.sample_rate),
+            band_mean_squares(&p, predicted_fs),
+        );
+        difference_db.push(
+            lm.iter()
+                .zip(&lp)
+                .map(|(m, p)| {
+                    let m = level(*m, per_unit).filter(|l| *l >= calibration_db - RESOLUTION_DB)?;
+                    level(*p, 1.0).map(|p| p - m)
+                })
+                .collect(),
+        );
+        times_s.push(t + 0.5 * frame);
+        t += 0.5 * frame;
+    }
+    SpectrogramDifference {
+        frame_s: frame,
+        times_s,
+        difference_db,
+    }
 }
 
 /// Pressure of `rec` over `window_s`, Pa, calibrated at `calibration_db`.
@@ -890,7 +1048,7 @@ mod tests {
         let bands = crate::render::third_octaves();
         let k = bands.iter().position(|b| b.0 == 1000.0).unwrap();
         let resolved = vec![true; bands.len()];
-        let c = compare_hold(&rec, 100.0, [0.5, 1.5], None, &predicted, fs, &resolved);
+        let c = compare_bands(&rec, 100.0, [0.5, 1.5], None, &predicted, fs, &resolved);
         assert!(
             (c[k].measured_db.unwrap() - 94.0).abs() < 0.05,
             "{:?}",
@@ -902,7 +1060,7 @@ mod tests {
             samples: tone(0.5 * 10f64.powf(-db_down / 20.0)),
         };
         let bg = quiet(8.0);
-        let c = compare_hold(
+        let c = compare_bands(
             &rec,
             100.0,
             [0.5, 1.5],
@@ -918,7 +1076,7 @@ mod tests {
             c[k]
         );
         let bg = quiet(3.0);
-        let c = compare_hold(
+        let c = compare_bands(
             &rec,
             100.0,
             [0.5, 1.5],

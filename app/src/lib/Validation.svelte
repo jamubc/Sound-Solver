@@ -1,6 +1,6 @@
 <script lang="ts">
   import { open } from '@tauri-apps/plugin-dialog';
-  import { backend, type Hold } from './backend';
+  import { backend, type RecordingCheck } from './backend';
   import { fileName } from './format';
   import { cancelRender, playClip, stop } from './player.svelte';
   import { app } from './state.svelte';
@@ -12,12 +12,12 @@
     recordings.map((r, i) => ({ r, i })).filter(({ r }) => r.calibration_db !== undefined && r.calibration_db !== null),
   );
 
-  // A steady hold against a render of the same speed.
+  // A window of a recording against a render of the same speed.
   let index = $state<number | null>(null);
   let from = $state(1);
   let to = $state(4);
   let background = $state<string | null>(null);
-  let hold = $state<Hold | null>(null);
+  let hold = $state<RecordingCheck | null>(null);
   let holding = $state(false);
   let progress = $state<string | null>(null);
   let failure = $state<string | null>(null);
@@ -30,7 +30,7 @@
     failure = null;
     holding = true;
     try {
-      hold = await backend.validateHold($state.snapshot(app.project) as Project, index, [from, to], background, (p) => {
+      hold = await backend.checkRecording($state.snapshot(app.project) as Project, index, [from, to], background, (p) => {
         progress = p.stage === 'march' ? `rendering: ${Math.round(100 * p.fraction)} %` : `settling: cycle ${p.cycle}`;
       });
     } catch (e) {
@@ -49,6 +49,27 @@
   const compared = $derived(hold?.comparison.bands.filter((b) => b.error_db !== null && b.error_db !== undefined) ?? []);
   const within = $derived(compared.filter((b) => Math.abs(b.error_db!) <= b.target_db).length);
   const fmt = (v: number | null | undefined, digits = 1) => (v === null || v === undefined ? '—' : v.toFixed(digits));
+
+  // Spectrogram difference: bands up, frames across; blue where the render is quieter, red louder.
+  let canvas = $state<HTMLCanvasElement>();
+  $effect(() => {
+    const s = hold?.comparison.spectrogram;
+    if (!canvas || !s || !s.difference_db.length) return;
+    const g = canvas.getContext('2d')!;
+    const [w, h] = [(canvas.width = canvas.clientWidth * 2), (canvas.height = canvas.clientHeight * 2)];
+    const bands = s.difference_db[0].length;
+    const [cw, ch] = [w / s.difference_db.length, h / bands];
+    s.difference_db.forEach((frame, i) =>
+      frame.forEach((d, b) => {
+        if (d === null || d === undefined) g.fillStyle = '#2a303a';
+        else {
+          const x = Math.max(-1, Math.min(1, d / 20));
+          g.fillStyle = x < 0 ? `rgba(90, 150, 255, ${-x})` : `rgba(255, 110, 90, ${x})`;
+        }
+        g.fillRect(i * cw, h - (b + 1) * ch, cw + 1, ch + 1);
+      }),
+    );
+  });
   const hz = (f: number) => (f >= 1000 ? `${+(f / 1000).toFixed(1)} k` : `${Math.round(f)}`);
 
   // The analytic verification suite, on demand.
@@ -84,10 +105,11 @@
 </script>
 
 <section data-testid="hold-check">
-  <h2>Check against a steady hold</h2>
+  <h2>Check a recording against a render</h2>
   <p class="muted">
-    A calibrated recording at the receiver (ISO 5130: 0.5 m, 45°, outlet height) or at the driver's ear, at a steady engine
-    speed, set against a render of the same speed there. Recordings only validate: no input is ever fitted to one.
+    A window of a calibrated recording at the receiver (ISO 5130: 0.5 m, 45°, outlet height) or at the driver's ear set
+    against a render of the same engine speed there: the logged run (a steady hold or a run-up), or the estimated mean
+    without a log. Recordings only validate: no input is ever fitted to one.
   </p>
   {#if calibrated.length}
     <label class="row">
@@ -97,7 +119,7 @@
       </select>
     </label>
     <label class="row">
-      <span class="label">Hold</span>
+      <span class="label">Window</span>
       <input type="number" min="0" step="0.1" bind:value={from} /> to <input type="number" min="0" step="0.1" bind:value={to} /> s
     </label>
     <div class="line">
@@ -129,6 +151,8 @@
       <button onclick={stop}>Stop</button>
       <span class="muted">both at one scale</span>
     </div>
+    <canvas bind:this={canvas} class="spectrogram" title="Render less recording per band and frame: blue quieter, red louder, grey unknown"></canvas>
+    <div class="axis mono muted"><span>0 s</span><span>render − recording, ±20 dB</span><span>{(c.window_s[1] - c.window_s[0]).toFixed(1)} s</span></div>
     <table class="bands mono" data-testid="hold-bands">
       <thead><tr><th>Hz</th><th>measured</th><th>render</th><th>error</th><th>target</th><th></th></tr></thead>
       <tbody>
@@ -201,6 +225,20 @@
   .label {
     width: 84px;
     color: var(--muted);
+  }
+
+  canvas.spectrogram {
+    width: 100%;
+    height: 90px;
+    margin-top: 8px;
+    background: var(--bg);
+    border: 1px solid var(--line);
+  }
+
+  .axis {
+    display: flex;
+    justify-content: space-between;
+    font-size: 10px;
   }
 
   table.bands {

@@ -4,7 +4,7 @@ import { Channel, invoke } from '@tauri-apps/api/core';
 import type {
   CaseReport,
   Clearance,
-  HoldComparison,
+  RecordingComparison,
   CycleProgress,
   Layout,
   Manifest,
@@ -43,9 +43,9 @@ export interface Clip {
   samples: Float32Array;
 }
 
-/** A steady hold of a recording set against a render of the same speed, and both pressures. */
-export interface Hold {
-  comparison: HoldComparison;
+/** A window of a recording set against a render of the same speed, and both pressures. */
+export interface RecordingCheck {
+  comparison: RecordingComparison;
   measured: Clip;
   predicted: Clip;
 }
@@ -135,20 +135,20 @@ export const backend = {
     return { info, channels };
   },
   cancelRender: () => invoke<void>('cancel_render'),
-  /** A steady hold of recording `index` (`windowS`, s) against a render of the same speed. */
-  async validateHold(
+  /** A window of recording `index` (`windowS`, s) against a render of the same speed. */
+  async checkRecording(
     project: Project,
     index: number,
     windowS: [number, number],
     background: string | null,
     onProgress: (progress: RenderProgress) => void,
-  ): Promise<Hold> {
+  ): Promise<RecordingCheck> {
     const progress = new Channel<RenderProgress>();
     progress.onmessage = onProgress;
-    const bytes = await invoke<ArrayBuffer>('validate_hold', { project, index, windowS, background, onProgress: progress });
+    const bytes = await invoke<ArrayBuffer>('check_recording', { project, index, windowS, background, onProgress: progress });
     const view = new DataView(bytes);
     const length = view.getUint32(0, true);
-    const comparison = JSON.parse(new TextDecoder().decode(new Uint8Array(bytes, 4, length))) as HoldComparison;
+    const comparison = JSON.parse(new TextDecoder().decode(new Uint8Array(bytes, 4, length))) as RecordingComparison;
     let at = 4 + length;
     const clip = (): Clip => {
       const [sampleRate, n] = [view.getFloat64(at, true), view.getUint32(at + 8, true)];

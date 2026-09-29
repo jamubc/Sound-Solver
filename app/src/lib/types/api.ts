@@ -246,7 +246,6 @@ export interface Api {
   clearance: Clearance;
   differences: OrderDifference[];
   fabrication: Package;
-  hold: HoldComparison;
   layout: Layout;
   manifests: Manifest[];
   /**
@@ -262,6 +261,7 @@ export interface Api {
         status: "failed";
       };
   progress: CycleProgress;
+  recording_check: RecordingComparison;
   render: RenderInfo;
   render_progress: RenderProgress;
   scene: Scene;
@@ -467,61 +467,6 @@ export interface Weld {
    */
   note?: string | null;
   route: string;
-}
-/**
- * A steady hold of a calibrated recording set against a render of the same engine speed at
- * the same place, band by band. Recordings validate; nothing here is fed back into an input.
- *
- * This interface was referenced by `Api`'s JSON-Schema
- * via the `definition` "HoldComparison".
- */
-export interface HoldComparison {
-  bands: BandComparison[];
-  /**
-   * Engine speed over the hold: mean and standard deviation, rpm.
-   */
-  rpm: number;
-  /**
-   * Engine speed estimated from the recording, without a log.
-   */
-  rpm_estimated: boolean;
-  rpm_spread: number;
-  /**
-   * The hold, s from the recording's start.
-   *
-   * @minItems 2
-   * @maxItems 2
-   */
-  window_s: [number, number];
-}
-/**
- * This interface was referenced by `Api`'s JSON-Schema
- * via the `definition` "BandComparison".
- */
-export interface BandComparison {
-  center_hz: number;
-  /**
-   * Predicted less measured, dB.
-   */
-  error_db?: number | null;
-  /**
-   * Measured level, dB re 20 µPa, corrected for the background when one is given; `None`
-   * where the recording cannot give it.
-   */
-  measured_db?: number | null;
-  /**
-   * Why the measured level is missing or corrected.
-   */
-  note?: string | null;
-  predicted_db?: number | null;
-  /**
-   * The render resolves this band.
-   */
-  resolved: boolean;
-  /**
-   * Indicative target, ± dB (shown, not passed or failed): 3 up to 2 kHz, 5 above.
-   */
-  target_db: number;
 }
 /**
  * This interface was referenced by `Api`'s JSON-Schema
@@ -772,6 +717,81 @@ export interface CycleProgress {
   cycle: number;
   residual?: number | null;
   rpm: number;
+}
+/**
+ * A window of a calibrated recording set against a render of the same engine speed at the
+ * same place. Recordings validate; nothing here is fed back into an input.
+ *
+ * This interface was referenced by `Api`'s JSON-Schema
+ * via the `definition` "RecordingComparison".
+ */
+export interface RecordingComparison {
+  bands: BandComparison[];
+  /**
+   * Engine speed over the window: mean and standard deviation, rpm.
+   */
+  rpm: number;
+  /**
+   * Engine speed estimated from the recording, without a log.
+   */
+  rpm_estimated: boolean;
+  rpm_spread: number;
+  spectrogram: SpectrogramDifference;
+  /**
+   * The window checked, s from the recording's start (at most 20 s).
+   *
+   * @minItems 2
+   * @maxItems 2
+   */
+  window_s: [number, number];
+}
+/**
+ * This interface was referenced by `Api`'s JSON-Schema
+ * via the `definition` "BandComparison".
+ */
+export interface BandComparison {
+  center_hz: number;
+  /**
+   * Predicted less measured, dB.
+   */
+  error_db?: number | null;
+  /**
+   * Measured level, dB re 20 µPa, corrected for the background when one is given; `None`
+   * where the recording cannot give it.
+   */
+  measured_db?: number | null;
+  /**
+   * Why the measured level is missing or corrected.
+   */
+  note?: string | null;
+  predicted_db?: number | null;
+  /**
+   * The render resolves this band.
+   */
+  resolved: boolean;
+  /**
+   * Indicative target, ± dB (shown, not passed or failed): 3 up to 2 kHz, 5 above.
+   */
+  target_db: number;
+}
+/**
+ * Predicted less measured level in each ⅓-octave band of each frame (Hann, `frame_s` long,
+ * every half frame).
+ *
+ * This interface was referenced by `Api`'s JSON-Schema
+ * via the `definition` "SpectrogramDifference".
+ */
+export interface SpectrogramDifference {
+  /**
+   * Per frame, per band (`render::third_octaves`), dB; `None` where either level is
+   * missing or below the recording's resolution.
+   */
+  difference_db: (number | null)[][];
+  frame_s: number;
+  /**
+   * Frame centres, s from the window's start.
+   */
+  times_s: number[];
 }
 /**
  * This interface was referenced by `Api`'s JSON-Schema

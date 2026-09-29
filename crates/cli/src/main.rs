@@ -171,18 +171,19 @@ enum Command {
         #[arg(long)]
         info: Option<PathBuf>,
     },
-    /// Check a steady hold of one of the project's calibrated recordings against a render of
-    /// the same engine speed where it was made, band by band (JSON).
-    Hold {
+    /// Check a window of one of the project's calibrated recordings against a render of the
+    /// same engine speed (the logged run, or the estimated mean) where it was made: band by
+    /// band and frame by frame (JSON).
+    Check {
         /// Project file (JSON).
         project: PathBuf,
         /// Index into `measurements.recordings`.
         #[arg(long, default_value_t = 0)]
         recording: usize,
-        /// Start of the hold, s from the recording's start.
+        /// Start of the window, s from the recording's start.
         #[arg(long)]
         from: f64,
-        /// End of the hold, s.
+        /// End of the window, s (at most 20 s after its start).
         #[arg(long)]
         to: f64,
         /// A recording of the background, same phone at the same gain.
@@ -515,7 +516,7 @@ fn run(cli: Cli) -> Result<ExitCode, String> {
             )?;
             Ok(ExitCode::SUCCESS)
         }
-        Command::Hold {
+        Command::Check {
             project: path,
             recording,
             from,
@@ -528,9 +529,6 @@ fn run(cli: Cli) -> Result<ExitCode, String> {
                 .recordings
                 .get(recording)
                 .ok_or_else(|| format!("the project has no recording {recording}"))?;
-            let cal = spec
-                .calibration_db
-                .ok_or("calibrate the recording first: the comparison is in dB re 20 µPa")?;
             let dir = path.parent().unwrap_or(Path::new("."));
             let read_rec = |file: &Path| -> Result<Recording, String> {
                 let bytes = std::fs::read(file).map_err(|e| format!("{}: {e}", file.display()))?;
@@ -546,33 +544,18 @@ fn run(cli: Cli) -> Result<ExitCode, String> {
                 }
                 None => None,
             };
-            let [start, stop, _] = project.operating.sweep_rpm;
-            let window = [from, to];
-            let (rpm, rpm_spread, rpm_estimated) =
-                measure::hold_rpm(&rec, log.as_ref(), spec.log_offset_s, window, [start, stop])
-                    .map_err(|e| e.to_string())?;
-            let scene = measure::hold_scene(rpm, window, spec.position);
-            let r = render(&project, &scene, &mut |_| true).map_err(|e| e.to_string())?;
             let background = background.as_deref().map(read_rec).transpose()?;
-            let resolved: Vec<bool> = r.info.bands.iter().map(|b| b.resolved).collect();
-            emit(
-                &measure::HoldComparison {
-                    window_s: window,
-                    rpm,
-                    rpm_spread,
-                    rpm_estimated,
-                    bands: measure::compare_hold(
-                        &rec,
-                        cal,
-                        window,
-                        background.as_ref().map(|b| (b, cal)),
-                        &r.channels[0],
-                        r.info.sample_rate,
-                        &resolved,
-                    ),
-                },
-                None,
-            )?;
+            let check = measure::check_recording(
+                &project,
+                recording,
+                &rec,
+                log.as_ref(),
+                [from, to],
+                background.as_ref(),
+                |scene| render(&project, scene, &mut |_| true).map(|r| (r.info, r.channels)),
+            )
+            .map_err(|e| e.to_string())?;
+            emit(&check.comparison, None)?;
             Ok(ExitCode::SUCCESS)
         }
         Command::Sensitivity { project, rpm, out } => {

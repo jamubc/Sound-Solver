@@ -5,7 +5,7 @@
 use exhaust_core::fabricate::Package;
 use exhaust_core::layout::Layout;
 use exhaust_core::manifest::Manifest;
-use exhaust_core::measure::{HoldComparison, OrderTracks};
+use exhaust_core::measure::{OrderTracks, RecordingComparison};
 use exhaust_core::metrics::OrderDifference;
 use exhaust_core::project::Project;
 use exhaust_core::render::{RenderInfo, RenderProgress, Scene};
@@ -34,7 +34,7 @@ struct Api {
     scene: Scene,
     render: RenderInfo,
     render_progress: RenderProgress,
-    hold: HoldComparison,
+    recording_check: RecordingComparison,
     verification: Vec<CaseReport>,
     sensitivity: Sensitivity,
 }
